@@ -7,9 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"gobat/internal/config"
 )
 
 func TestGzipFileCreatesValidArchive(t *testing.T) {
@@ -57,48 +54,5 @@ func TestGzipFileCreatesValidArchive(t *testing.T) {
 
 	if got := buf.String(); got != content {
 		t.Fatalf("gzip content mismatch: got %q, want %q", got, content)
-	}
-}
-
-func TestCompressOldLogsNeverCompressesRecentMonths(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	histDir := filepath.Join(tmpDir, "historial")
-	if err := os.MkdirAll(histDir, 0755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	now := time.Now()
-	currentMonth := now.Format("2006-01")
-	lastMonth := now.AddDate(0, -1, 0).Format("2006-01")
-	oldMonth := now.AddDate(0, -3, 0).Format("2006-01")
-
-	// Crear archivos de prueba
-	for _, month := range []string{currentMonth, lastMonth, oldMonth} {
-		path := filepath.Join(histDir, month+".txt")
-		if err := os.WriteFile(path, []byte("test data"), 0644); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-	}
-
-	cfg := config.Config{HistorialDir: histDir, MesesSinComprimir: 2}
-	compressOldLogs(cfg)
-
-	for _, month := range []string{currentMonth, lastMonth} {
-		if _, err := os.Stat(filepath.Join(histDir, month+".txt")); err != nil {
-			t.Errorf("recent month should not be compressed: %s (%v)", month, err)
-		}
-		if _, err := os.Stat(filepath.Join(histDir, month+".txt.gz")); !os.IsNotExist(err) {
-			t.Errorf("recent month should not have .gz: %s", month)
-		}
-	}
-
-	gzPath := filepath.Join(histDir, oldMonth+".txt.gz")
-	if _, err := os.Stat(gzPath); err != nil {
-		t.Fatalf("old month should be compressed: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(histDir, oldMonth+".txt")); !os.IsNotExist(err) {
-		t.Fatalf("old month source should be removed after compression")
 	}
 }

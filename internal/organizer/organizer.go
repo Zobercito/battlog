@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"gobat/internal/config"
 )
@@ -31,11 +30,6 @@ func Run(cfg config.Config) {
 		return
 	}
 	defer releaseLock()
-
-	if err := os.MkdirAll(cfg.HistorialDir, 0755); err != nil {
-		log.Printf("ERROR creando historial: %v", err)
-		return
-	}
 
 	// Cargar archivos ya procesados usando streaming para O(1) memoria
 	procesados := make(map[string]bool)
@@ -95,15 +89,6 @@ func Run(cfg config.Config) {
 	}
 	defer controlF.Close()
 
-	archivosMensuales := make(map[string]*os.File)
-	defer func() {
-		for _, mf := range archivosMensuales {
-			if err := mf.Close(); err != nil {
-				log.Printf("Aviso: error cerrando archivo mensual: %v", err)
-			}
-		}
-	}()
-
 	// Procesar cada archivo
 	for _, file := range files {
 		if file.IsDir() || procesados[file.Name()] {
@@ -132,7 +117,7 @@ func Run(cfg config.Config) {
 			omitidos++
 			continue
 		}
-		anio, mes := matches[1], matches[2]
+		_ = matches // año y mes no se usan actualmente
 
 		// Reemplaza la carga masiva en memoria por un streaming línea por línea
 		inFile, err := os.Open(filepath.Join(cfg.LogDir, file.Name()))
@@ -142,30 +127,7 @@ func Run(cfg config.Config) {
 			continue
 		}
 
-		// Inicializar descriptores mensuales
-		mensualPath := filepath.Join(cfg.HistorialDir, fmt.Sprintf("%s-%s.txt", anio, mes))
-		mf, existe := archivosMensuales[mensualPath]
-		if !existe {
-			mf, err = os.OpenFile(mensualPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				log.Printf("Aviso: no se pudo abrir %s: %v", mensualPath, err)
-				inFile.Close()
-				erroresProcesamiento++
-				continue
-			}
-			archivosMensuales[mensualPath] = mf
-		}
-
-		// Capturar tamaños originales para rollback en caso de fallo
-		statMf, err := mf.Stat()
-		if err != nil {
-			log.Printf("Aviso: no se pudo obtener stat del historial mensual: %v", err)
-			inFile.Close()
-			erroresProcesamiento++
-			continue
-		}
-		mfOrigSize := statMf.Size()
-
+		// Capturar tamaño original del master para rollback en caso de fallo
 		statMaster, err := masterF.Stat()
 		if err != nil {
 			log.Printf("Aviso: no se pudo obtener stat del log maestro: %v", err)
@@ -188,10 +150,6 @@ func Run(cfg config.Config) {
 				return r
 			}, scanner.Text())
 
-			if _, err := mf.WriteString(cleanLine + "\n"); err != nil {
-				writeErr = err
-				break
-			}
 			if _, err := masterF.WriteString(cleanLine + "\n"); err != nil {
 				writeErr = err
 				break
@@ -209,10 +167,11 @@ func Run(cfg config.Config) {
 			log.Printf("ERROR de I/O leyendo log %s: %v", file.Name(), scanErr)
 			failed = true
 		} else {
-			// Si no hubo error, escribimos saltos de línea finales
-			if _, err := mf.WriteString("\n"); err != nil { failed = true }
-			if _, err := masterF.WriteString("\n"); err != nil { failed = true }
-			
+			// Si no hubo error, escribimos salto de línea final
+			if _, err := masterF.WriteString("\n"); err != nil {
+				failed = true
+			}
+
 			// Si aún no hay error, hacemos el "Commit" en el archivo de control
 			if !failed {
 				if _, err := controlF.WriteString(file.Name() + "\n"); err != nil {
@@ -222,10 +181,9 @@ func Run(cfg config.Config) {
 			}
 		}
 
-		// Rollback unificado: Si cualquier paso falló, revertimos
+		// Rollback: Si cualquier paso falló, revertimos solo el master
 		if failed {
 			log.Printf("Revirtiendo cambios de %s...", file.Name())
-			mf.Truncate(mfOrigSize)
 			masterF.Truncate(masterOrigSize)
 			erroresProcesamiento++
 			continue
@@ -235,70 +193,6 @@ func Run(cfg config.Config) {
 	}
 
 	fmt.Printf("Procesados %d archivos nuevos, %d omitidos, %d errores.\n", nuevosProcesados, omitidos, erroresProcesamiento)
-
-	// Cierre explícito de descriptores para liberar inodos antes de comprimir/borrar
-	for path, mf := range archivosMensuales {
-		mf.Close()
-		delete(archivosMensuales, path)
-	}
-
-	compressOldLogs(cfg)
-}
-
-// compressOldLogs comprime archivos de log que no son recientes
-func compressOldLogs(cfg config.Config) {
-	files, err := os.ReadDir(cfg.HistorialDir)
-	if err != nil {
-		log.Printf("Aviso: no se pudo leer historial para compresión: %v", err)
-		return
-	}
-
-	reMes := regexp.MustCompile(`^\d{4}-\d{2}$`) // Se compila 1 sola vez en memoria
-
-	for _, file := range files {
-		if filepath.Ext(file.Name()) != ".txt" {
-			continue
-		}
-
-		nombreMes := strings.TrimSuffix(file.Name(), ".txt")
-		
-		// Validar que el nombre del archivo sea exactamente YYYY-MM (7 caracteres)
-		// y cumpla con el formato antes de procesarlo.
-		if len(nombreMes) != 7 || !reMes.MatchString(nombreMes) {
-			continue
-		}
-		esReciente := false
-
-		// Verificar si es uno de los últimos meses
-		now := time.Now()
-		refTime := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		for i := 0; i < cfg.MesesSinComprimir; i++ {
-			ref := refTime.AddDate(0, -i, 0).Format("2006-01")
-			if nombreMes == ref {
-				esReciente = true
-				break
-			}
-		}
-
-		if !esReciente {
-			fullPath := filepath.Join(cfg.HistorialDir, file.Name())
-			gzPath := fullPath + ".gz"
-
-			targetGz := gzPath
-			if _, err := os.Stat(targetGz); err == nil {
-				targetGz = fmt.Sprintf("%s_%s.gz", fullPath, time.Now().Format("150405"))
-			}
-
-			if err := gzipFile(fullPath, targetGz); err == nil {
-				if err := os.Remove(fullPath); err != nil {
-					log.Printf("Aviso: no se pudo borrar archivo sin comprimir %s: %v", fullPath, err)
-				}
-				log.Printf("Comprimido: %s -> %s", file.Name(), filepath.Base(targetGz))
-			} else {
-				log.Printf("Aviso: no se pudo comprimir %s: %v", fullPath, err)
-			}
-		}
-	}
 }
 
 // gzipFile comprime un archivo con gzip de forma segura

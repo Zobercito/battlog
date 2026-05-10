@@ -9,12 +9,10 @@ import (
 type Config struct {
 	LogsRoot          string
 	LogDir            string
-	HistorialDir      string
 	MasterLog         string
 	ControlFile       string
 	LockFile          string
 	IntervaloSegundos int
-	MesesSinComprimir int
 }
 
 // Load carga la configuración con valores por defecto
@@ -30,11 +28,9 @@ func Load() Config {
 	return Config{
 		LogsRoot:          logsRoot,
 		LogDir:            filepath.Join(logsRoot, "logs"),
-		HistorialDir:      filepath.Join(logsRoot, "logs_historial"),
 		MasterLog:         filepath.Join(logsRoot, "logs_todo.txt"),
 		ControlFile:       filepath.Join(logsRoot, "archivos_procesados.txt"),
 		LockFile:          filepath.Join(logsRoot, ".organizar.lock"),
 		IntervaloSegundos: 60,
-		MesesSinComprimir: 2,
 	}
 }
