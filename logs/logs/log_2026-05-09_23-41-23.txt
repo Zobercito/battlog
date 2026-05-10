@@ -1,0 +1,326 @@
+--- Inicio del Log: Sat, 09 May 2026 23:41:23 EST ---
+--- Dispositivo: /org/freedesktop/UPower/devices/battery_BAT0 ---
+--- Intervalo: 60s ---
+
+--- 2026-05-09 23:42:24 ---
+Battery Status:
+  state                    : discharging
+  percentage               : 79%
+  energy-rate              : 15.292 W
+  voltage                  : 11.817 V
+  time to empty            : 2.1 hours
+  power_profile            : balanced
+
+Battery Health:
+  cycles                   : 365
+  capacity (current)       : 41.025 Wh
+  capacity (design)        : 41.025 Wh
+  wear_level               : 0.0%
+
+CPU:
+  current_frequency        : 1.2 GHz / 3.0 GHz max
+  cpu_temp                 : 47°C
+  load_avg (1min)          : 2.09
+  thermal_throttling       : inactive
+
+GPU:
+  nvidia_gpu               : off (integrated only)
+
+Memory:
+  used                     : 11.2 GB / 15 GB (75%)
+  swap_used                : 191 MB
+
+Display:
+  brightness               : 0%
+
+Top Processes (cpu):
+  1. exe : 57.0% (548 MB) (PID: 222834)
+  2. brave : 23.1% (603 MB) (PID: 203308)
+  3. code : 17.1% (672 MB) (PID: 11776)
+  4. opencode : 15.0% (561 MB) (PID: 402957)
+  5. Discord : 14.2% (171 MB) (PID: 222294)
+  6. gnome-shell : 14.0% (395 MB) (PID: 2414)
+  7. antigravity : 12.8% (452 MB) (PID: 507253)
+  8. blackbox : 8.6% (134 MB) (PID: 15812)
+
+Connectivity:
+  wifi                     : on (connected)
+  bluetooth                : on
+
+
+--- 2026-05-09 23:43:24 ---
+Battery Status:
+  state                    : discharging
+  percentage               : 79%
+  energy-rate              : 14.564 W
+  voltage                  : 11.752 V
+  time to empty            : 2.2 hours
+  power_profile            : balanced
+
+Battery Health:
+  cycles                   : 365
+  capacity (current)       : 41.025 Wh
+  capacity (design)        : 41.025 Wh
+  wear_level               : 0.0%
+
+CPU:
+  current_frequency        : 1.4 GHz / 3.0 GHz max
+  cpu_temp                 : 47°C
+  load_avg (1min)          : 2.66
+  thermal_throttling       : inactive
+
+GPU:
+  nvidia_gpu               : off (integrated only)
+
+Memory:
+  used                     : 11.2 GB / 15 GB (75%)
+  swap_used                : 191 MB
+
+Display:
+  brightness               : 0%
+
+Top Processes (cpu):
+  1. exe : 57.2% (558 MB) (PID: 222834)
+  2. brave : 23.0% (603 MB) (PID: 203308)
+  3. code : 17.0% (666 MB) (PID: 11776)
+  4. opencode : 14.9% (568 MB) (PID: 402957)
+  5. Discord : 14.2% (170 MB) (PID: 222294)
+  6. gnome-shell : 14.0% (396 MB) (PID: 2414)
+  7. antigravity : 12.5% (456 MB) (PID: 507253)
+  8. blackbox : 8.6% (134 MB) (PID: 15812)
+
+Connectivity:
+  wifi                     : on (connected)
+  bluetooth                : on
+
+
+--- 2026-05-09 23:44:24 ---
+Battery Status:
+  state                    : discharging
+  percentage               : 79%
+  energy-rate              : 14.564 W
+  voltage                  : 11.752 V
+  time to empty            : 2.2 hours
+  power_profile            : balanced
+
+Battery Health:
+  cycles                   : 365
+  capacity (current)       : 41.025 Wh
+  capacity (design)        : 41.025 Wh
+  wear_level               : 0.0%
+
+CPU:
+  current_frequency        : 2.4 GHz / 3.0 GHz max
+  cpu_temp                 : 48°C
+  load_avg (1min)          : 2.78
+  thermal_throttling       : inactive
+
+GPU:
+  nvidia_gpu               : off (integrated only)
+
+Memory:
+  used                     : 11.2 GB / 15 GB (75%)
+  swap_used                : 191 MB
+
+Display:
+  brightness               : 0%
+
+Top Processes (cpu):
+  1. exe : 57.3% (554 MB) (PID: 222834)
+  2. brave : 22.9% (603 MB) (PID: 203308)
+  3. code : 17.0% (673 MB) (PID: 11776)
+  4. opencode : 14.7% (568 MB) (PID: 402957)
+  5. Discord : 14.3% (171 MB) (PID: 222294)
+  6. gnome-shell : 14.0% (396 MB) (PID: 2414)
+  7. antigravity : 12.2% (458 MB) (PID: 507253)
+  8. blackbox : 8.6% (134 MB) (PID: 15812)
+
+Connectivity:
+  wifi                     : on (connected)
+  bluetooth                : on
+
+
+--- 2026-05-09 23:45:24 ---
+Battery Status:
+  state                    : discharging
+  percentage               : 77%
+  energy-rate              : 14.194 W
+  voltage                  : 11.691 V
+  time to empty            : 2.2 hours
+  power_profile            : balanced
+
+Battery Health:
+  cycles                   : 365
+  capacity (current)       : 41.025 Wh
+  capacity (design)        : 41.025 Wh
+  wear_level               : 0.0%
+
+CPU:
+  current_frequency        : 1.5 GHz / 3.0 GHz max
+  cpu_temp                 : 47°C
+  load_avg (1min)          : 2.69
+  thermal_throttling       : inactive
+
+GPU:
+  nvidia_gpu               : off (integrated only)
+
+Memory:
+  used                     : 11.2 GB / 15 GB (74%)
+  swap_used                : 191 MB
+
+Display:
+  brightness               : 0%
+
+Top Processes (cpu):
+  1. exe : 57.4% (564 MB) (PID: 222834)
+  2. brave : 22.8% (603 MB) (PID: 203308)
+  3. code : 16.9% (683 MB) (PID: 11776)
+  4. opencode : 14.6% (568 MB) (PID: 402957)
+  5. Discord : 14.3% (172 MB) (PID: 222294)
+  6. gnome-shell : 14.0% (396 MB) (PID: 2414)
+  7. antigravity : 12.2% (460 MB) (PID: 507253)
+  8. blackbox : 8.6% (134 MB) (PID: 15812)
+
+Connectivity:
+  wifi                     : on (connected)
+  bluetooth                : on
+
+
+--- 2026-05-09 23:46:24 ---
+Battery Status:
+  state                    : discharging
+  percentage               : 77%
+  energy-rate              : 14.194 W
+  voltage                  : 11.691 V
+  time to empty            : 2.2 hours
+  power_profile            : balanced
+
+Battery Health:
+  cycles                   : 365
+  capacity (current)       : 41.025 Wh
+  capacity (design)        : 41.025 Wh
+  wear_level               : 0.0%
+
+CPU:
+  current_frequency        : 1.4 GHz / 3.0 GHz max
+  cpu_temp                 : 47°C
+  load_avg (1min)          : 2.58
+  thermal_throttling       : inactive
+
+GPU:
+  nvidia_gpu               : off (integrated only)
+
+Memory:
+  used                     : 11.2 GB / 15 GB (74%)
+  swap_used                : 191 MB
+
+Display:
+  brightness               : 0%
+
+Top Processes (cpu):
+  1. exe : 57.5% (554 MB) (PID: 222834)
+  2. brave : 22.6% (603 MB) (PID: 203308)
+  3. code : 16.9% (675 MB) (PID: 11776)
+  4. opencode : 14.5% (552 MB) (PID: 402957)
+  5. Discord : 14.3% (171 MB) (PID: 222294)
+  6. gnome-shell : 14.0% (396 MB) (PID: 2414)
+  7. antigravity : 12.0% (460 MB) (PID: 507253)
+  8. blackbox : 8.6% (134 MB) (PID: 15812)
+
+Connectivity:
+  wifi                     : on (connected)
+  bluetooth                : on
+
+
+--- 2026-05-09 23:47:24 ---
+Battery Status:
+  state                    : discharging
+  percentage               : 76%
+  energy-rate              : 17.186 W
+  voltage                  : 11.641 V
+  time to empty            : 1.8 hours
+  power_profile            : balanced
+
+Battery Health:
+  cycles                   : 365
+  capacity (current)       : 41.025 Wh
+  capacity (design)        : 41.025 Wh
+  wear_level               : 0.0%
+
+CPU:
+  current_frequency        : 1.2 GHz / 3.0 GHz max
+  cpu_temp                 : 47°C
+  load_avg (1min)          : 3.12
+  thermal_throttling       : inactive
+
+GPU:
+  nvidia_gpu               : off (integrated only)
+
+Memory:
+  used                     : 11.3 GB / 15 GB (75%)
+  swap_used                : 191 MB
+
+Display:
+  brightness               : 0%
+
+Top Processes (cpu):
+  1. exe : 57.7% (533 MB) (PID: 222834)
+  2. brave : 22.5% (603 MB) (PID: 203308)
+  3. code : 16.8% (679 MB) (PID: 11776)
+  4. Discord : 14.3% (177 MB) (PID: 222294)
+  5. opencode : 14.3% (552 MB) (PID: 402957)
+  6. gnome-shell : 14.0% (396 MB) (PID: 2414)
+  7. antigravity : 12.2% (469 MB) (PID: 507253)
+  8. blackbox : 8.6% (134 MB) (PID: 15812)
+
+Connectivity:
+  wifi                     : on (connected)
+  bluetooth                : on
+
+
+--- 2026-05-09 23:48:24 ---
+Battery Status:
+  state                    : discharging
+  percentage               : 76%
+  energy-rate              : 17.186 W
+  voltage                  : 11.641 V
+  time to empty            : 1.8 hours
+  power_profile            : balanced
+
+Battery Health:
+  cycles                   : 365
+  capacity (current)       : 41.025 Wh
+  capacity (design)        : 41.025 Wh
+  wear_level               : 0.0%
+
+CPU:
+  current_frequency        : 1.7 GHz / 3.0 GHz max
+  cpu_temp                 : 47°C
+  load_avg (1min)          : 3.19
+  thermal_throttling       : inactive
+
+GPU:
+  nvidia_gpu               : off (integrated only)
+
+Memory:
+  used                     : 11.4 GB / 15 GB (76%)
+  swap_used                : 191 MB
+
+Display:
+  brightness               : 0%
+
+Top Processes (cpu):
+  1. exe : 57.8% (551 MB) (PID: 222834)
+  2. brave : 22.4% (603 MB) (PID: 203308)
+  3. code : 16.8% (674 MB) (PID: 11776)
+  4. opencode : 14.5% (609 MB) (PID: 402957)
+  5. Discord : 14.3% (177 MB) (PID: 222294)
+  6. gnome-shell : 13.9% (397 MB) (PID: 2414)
+  7. antigravity : 12.2% (483 MB) (PID: 507253)
+  8. blackbox : 8.6% (134 MB) (PID: 15812)
+
+Connectivity:
+  wifi                     : on (connected)
+  bluetooth                : on
+
+

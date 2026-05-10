@@ -1,0 +1,2345 @@
+This file is a merged representation of a subset of the codebase, containing files not matching ignore patterns, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching these patterns are excluded: logs/, CAMBIOS.md
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+cmd/
+  gobat/
+    main.go
+internal/
+  config/
+    config.go
+  monitor/
+    monitor.go
+  organizer/
+    organizer_test.go
+    organizer.go
+  system/
+    system.go
+  utils/
+    utils.go
+ARQUITECTURA.md
+go.mod
+gobat
+QUICK_REFERENCE.md
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="cmd/gobat/main.go">
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+
+	"gobat/internal/config"
+	"gobat/internal/monitor"
+	"gobat/internal/organizer"
+)
+
+func main() {
+	// Parsear argumentos
+	mode := flag.String("mode", "log", "Modo: log o organize")
+	flag.Parse()
+
+	// Cargar configuración
+	cfg := config.Load()
+
+	// Ejecutar según el modo seleccionado
+	switch *mode {
+	case "log":
+		monitor.Run(cfg)
+	case "organize":
+		organizer.Run(cfg)
+	default:
+		fmt.Fprintf(os.Stderr, "ERROR: modo desconocido %q. Usa -mode=log o -mode=organize\n", *mode)
+		os.Exit(1)
+	}
+}
+</file>
+
+<file path="internal/config/config.go">
+package config
+
+import (
+	"os"
+	"path/filepath"
+)
+
+// Config contiene la configuración central de la aplicación
+type Config struct {
+	LogsRoot          string
+	LogDir            string
+	HistorialDir      string
+	MasterLog         string
+	ControlFile       string
+	LockFile          string
+	IntervaloSegundos int
+	MesesSinComprimir int
+}
+
+// Load carga la configuración con valores por defecto
+func Load() Config {
+	baseDir := "."
+	if exe, err := os.Executable(); err == nil {
+		baseDir = filepath.Dir(exe)
+	} else if wd, err := os.Getwd(); err == nil {
+		baseDir = wd
+	}
+
+	logsRoot := filepath.Join(baseDir, "logs")
+	return Config{
+		LogsRoot:          logsRoot,
+		LogDir:            filepath.Join(logsRoot, "logs"),
+		HistorialDir:      filepath.Join(logsRoot, "logs_historial"),
+		MasterLog:         filepath.Join(logsRoot, "logs_todo.txt"),
+		ControlFile:       filepath.Join(logsRoot, "archivos_procesados.txt"),
+		LockFile:          filepath.Join(logsRoot, ".organizar.lock"),
+		IntervaloSegundos: 60,
+		MesesSinComprimir: 2,
+	}
+}
+</file>
+
+<file path="internal/monitor/monitor.go">
+package monitor
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"gobat/internal/config"
+	"gobat/internal/system"
+)
+
+// Run inicia el monitor de batería
+func Run(cfg config.Config) {
+	batPath, err := system.DetectBattery()
+	if err != nil {
+		log.Printf("ERROR: %v", err)
+		return
+	}
+
+	if err := os.MkdirAll(cfg.LogDir, 0755); err != nil {
+		log.Printf("Error creando directorio de logs: %v", err)
+		return
+	}
+
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	logFileName := filepath.Join(cfg.LogDir, fmt.Sprintf("log_%s.txt", timestamp))
+
+	f, err := os.OpenFile(logFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Error creando log: %v", err)
+		return
+	}
+	defer f.Close()
+
+	// Bloqueamos el archivo a nivel SO. Se libera solo al hacer Close() o si el proceso muere.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		log.Printf("Aviso: no se pudo aplicar flock al archivo activo: %v", err)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	if _, err := fmt.Fprintf(f, "--- Inicio del Log: %s ---\n", time.Now().Format(time.RFC1123)); err != nil {
+		log.Printf("Error escribiendo cabecera de log: %v", err)
+		return
+	}
+	if _, err := fmt.Fprintf(f, "--- Dispositivo: %s ---\n", batPath); err != nil {
+		log.Printf("Error escribiendo cabecera de log: %v", err)
+		return
+	}
+	if _, err := fmt.Fprintf(f, "--- Intervalo: %ds ---\n\n", cfg.IntervaloSegundos); err != nil {
+		log.Printf("Error escribiendo cabecera de log: %v", err)
+		return
+	}
+	if err := f.Sync(); err != nil {
+		log.Printf("Aviso: no se pudo sincronizar cabecera de log: %v", err)
+	}
+
+	fmt.Printf("Monitoreando batería %s cada %ds...\n", batPath, cfg.IntervaloSegundos)
+
+	ticker := time.NewTicker(time.Duration(cfg.IntervaloSegundos) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			body := buildLogEntry(batPath)
+			entry := fmt.Sprintf("--- %s ---\n%s\n\n", time.Now().Format("2006-01-02 15:04:05"), body)
+			if _, err := f.WriteString(entry); err != nil {
+				log.Printf("Error escribiendo entrada de log: %v", err)
+				continue
+			}
+			if err := f.Sync(); err != nil {
+				log.Printf("Aviso: no se pudo sincronizar el log: %v", err)
+			}
+		case <-sigCh:
+			if _, err := fmt.Fprintf(f, "\n--- Fin del Log: %s ---\n", time.Now().Format(time.RFC1123)); err != nil {
+				log.Printf("Error escribiendo cierre de log: %v", err)
+			}
+			return
+		}
+	}
+}
+
+// buildLogEntry construye una entrada completa del log con información de sistema
+func buildLogEntry(batPath string) string {
+	bat := system.GetBatteryInfo(batPath)
+	sys := system.GetSystemInfo()
+
+	var b strings.Builder
+
+	// Battery Status Section
+	b.WriteString("Battery Status:\n")
+	writeKV := func(key, display string) {
+		if v, ok := bat[key]; ok && v != "" {
+			b.WriteString(fmt.Sprintf("  %-24s : %s\n", display, v))
+		} else {
+			b.WriteString(fmt.Sprintf("  %-24s : %s\n", display, "N/A"))
+		}
+	}
+
+	writeKV("state", "state")
+	writeKV("percentage", "percentage")
+	writeKV("energy-rate", "energy-rate")
+	writeKV("voltage", "voltage")
+
+	if state, ok := bat["state"]; ok {
+		switch state {
+		case "charging":
+			writeKV("time to full", "time to full")
+		case "fully-charged":
+			b.WriteString(fmt.Sprintf("  %-24s : %s\n", "time status", "fully charged"))
+		default:
+			writeKV("time to empty", "time to empty")
+		}
+	} else {
+		writeKV("time to empty", "time to empty")
+	}
+
+	// Battery Health Section
+	b.WriteString("Battery Health:\n")
+	writeKV("charge-cycles", "cycles")
+	writeKV("energy-full", "capacity (current)")
+	writeKV("energy-full-design", "capacity (design)")
+	writeKV("wear_level", "wear_level")
+	writeKV("cycles_remaining", "cycles_remaining")
+	writeKV("temperature", "battery_temp")
+
+	// CPU Section
+	b.WriteString("\nCPU:\n")
+	cpuKeys := []string{"current_frequency", "cpu_temp", "load_avg (1min)", "thermal_throttling"}
+	for _, k := range cpuKeys {
+		if v, ok := sys[k]; ok && v != "" {
+			b.WriteString(fmt.Sprintf("  %-24s : %s\n", k, v))
+		} else {
+			b.WriteString(fmt.Sprintf("  %-24s : %s\n", k, "N/A"))
+		}
+	}
+
+	// GPU Section
+	b.WriteString("\nGPU:\n")
+	if v, ok := sys["nvidia_gpu"]; ok {
+		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "nvidia_gpu", v))
+	} else {
+		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "nvidia_gpu", "N/A"))
+	}
+
+	// Memory Section
+	b.WriteString("\nMemory:\n")
+	if v, ok := sys["used"]; ok {
+		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "used", v))
+	} else {
+		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "used", "N/A"))
+	}
+	if v, ok := sys["swap_used"]; ok {
+		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "swap_used", v))
+	} else {
+		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "swap_used", "N/A"))
+	}
+
+	// Display Section
+	b.WriteString("\nDisplay:\n")
+	if v, ok := sys["brightness"]; ok {
+		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "brightness", v))
+	} else {
+		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "brightness", "N/A"))
+	}
+
+	// Top Processes Section
+	b.WriteString("\nTop Processes (cpu):\n")
+	for i := 1; i <= 5; i++ {
+		key := fmt.Sprintf("top%d", i)
+		if v, ok := sys[key]; ok {
+			b.WriteString(fmt.Sprintf("  %s\n", v))
+		} else {
+			b.WriteString("  N/A\n")
+		}
+	}
+
+	// Connectivity Section
+	b.WriteString("\nConnectivity:\n")
+	b.WriteString(fmt.Sprintf("  %-24s : %s\n", "wifi", getOrDefault(sys, "wifi")))
+	b.WriteString(fmt.Sprintf("  %-24s : %s\n", "bluetooth", getOrDefault(sys, "bluetooth")))
+
+	return b.String()
+}
+
+// getOrDefault obtiene un valor o retorna placeholder
+func getOrDefault(m map[string]string, key string) string {
+	if v, ok := m[key]; ok && v != "" {
+		return v
+	}
+	return "N/A"
+}
+</file>
+
+<file path="internal/organizer/organizer_test.go">
+package organizer
+
+import (
+	"bytes"
+	"compress/gzip"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"gobat/internal/config"
+)
+
+func TestGzipFileCreatesValidArchive(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source.txt")
+	dst := filepath.Join(dir, "source.txt.gz")
+	content := "linea 1\nlinea 2\n"
+
+	if err := os.WriteFile(src, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := gzipFile(src, dst); err != nil {
+		t.Fatalf("gzipFile: %v", err)
+	}
+
+	if _, err := os.Stat(dst); err != nil {
+		t.Fatalf("gzip output file not created: %v", err)
+	}
+
+	// Verificar que la fuente se mantiene (gzipFile no la elimina)
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("source file should still exist: %v", err)
+	}
+
+	// Verificar contenido descomprimido
+	gzf, err := os.Open(dst)
+	if err != nil {
+		t.Fatalf("os.Open gzip file: %v", err)
+	}
+	defer gzf.Close()
+
+	reader, err := gzip.NewReader(gzf)
+	if err != nil {
+		t.Fatalf("gzip.NewReader: %v", err)
+	}
+	defer reader.Close()
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, reader); err != nil {
+		t.Fatalf("io.Copy: %v", err)
+	}
+
+	if got := buf.String(); got != content {
+		t.Fatalf("gzip content mismatch: got %q, want %q", got, content)
+	}
+}
+
+func TestCompressOldLogsNeverCompressesRecentMonths(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	histDir := filepath.Join(tmpDir, "historial")
+	if err := os.MkdirAll(histDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	now := time.Now()
+	currentMonth := now.Format("2006-01")
+	lastMonth := now.AddDate(0, -1, 0).Format("2006-01")
+	oldMonth := now.AddDate(0, -3, 0).Format("2006-01")
+
+	// Crear archivos de prueba
+	for _, month := range []string{currentMonth, lastMonth, oldMonth} {
+		path := filepath.Join(histDir, month+".txt")
+		if err := os.WriteFile(path, []byte("test data"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	cfg := config.Config{HistorialDir: histDir, MesesSinComprimir: 2}
+	compressOldLogs(cfg)
+
+	for _, month := range []string{currentMonth, lastMonth} {
+		if _, err := os.Stat(filepath.Join(histDir, month+".txt")); err != nil {
+			t.Errorf("recent month should not be compressed: %s (%v)", month, err)
+		}
+		if _, err := os.Stat(filepath.Join(histDir, month+".txt.gz")); !os.IsNotExist(err) {
+			t.Errorf("recent month should not have .gz: %s", month)
+		}
+	}
+
+	gzPath := filepath.Join(histDir, oldMonth+".txt.gz")
+	if _, err := os.Stat(gzPath); err != nil {
+		t.Fatalf("old month should be compressed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(histDir, oldMonth+".txt")); !os.IsNotExist(err) {
+		t.Fatalf("old month source should be removed after compression")
+	}
+}
+</file>
+
+<file path="internal/organizer/organizer.go">
+package organizer
+
+import (
+	"bufio"
+	"compress/gzip"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"gobat/internal/config"
+)
+
+// Run inicia el organizador de logs
+func Run(cfg config.Config) {
+	if err := os.MkdirAll(cfg.LogsRoot, 0755); err != nil {
+		log.Printf("ERROR creando directorio base: %v", err)
+		return
+	}
+
+	releaseLock, err := acquireLock(cfg.LockFile)
+	if err != nil {
+		log.Printf("ERROR: %v", err)
+		return
+	}
+	defer releaseLock()
+
+	if err := os.MkdirAll(cfg.HistorialDir, 0755); err != nil {
+		log.Printf("ERROR creando historial: %v", err)
+		return
+	}
+
+	// Cargar archivos ya procesados usando streaming para O(1) memoria
+	procesados := make(map[string]bool)
+	if f, err := os.Open(cfg.ControlFile); err == nil {
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" {
+				procesados[line] = true
+			}
+		}
+		
+		// Verificar error de lectura del control
+		if err := scanner.Err(); err != nil {
+			log.Printf("ERROR CRÍTICO: I/O falló al leer %s: %v", cfg.ControlFile, err)
+			f.Close()
+			return // Abortar para evitar duplicación masiva
+		}
+		f.Close()
+	}
+
+	// Los logs de sesión se mantienen indefinidamente para máximo histórico.
+	// Solo se consolidan en archivos mensuales y se comprimen los antiguos.
+	// Listar archivos de log para procesar
+	files, err := os.ReadDir(cfg.LogDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("No hay logs de sesión todavía.")
+			return
+		}
+		log.Printf("ERROR leyendo directorio de logs: %v", err)
+		return
+	}
+
+	re := regexp.MustCompile(`^log_(\d{4})-(\d{2})-\d{2}_\d{2}-\d{2}-\d{2}\.txt$`)
+
+	nuevosProcesados := 0
+	omitidos := 0
+	erroresProcesamiento := 0
+
+	masterF, err := os.OpenFile(cfg.MasterLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("ERROR abriendo log maestro: %v", err)
+		return
+	}
+	defer func() {
+		if err := masterF.Close(); err != nil {
+			log.Printf("Aviso: error cerrando log maestro: %v", err)
+		}
+	}()
+
+	// Abrir archivo de control antes del loop para evitar I/O repetido
+	controlF, err := os.OpenFile(cfg.ControlFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("ERROR abriendo archivo de control: %v", err)
+		return
+	}
+	defer controlF.Close()
+
+	archivosMensuales := make(map[string]*os.File)
+	defer func() {
+		for _, mf := range archivosMensuales {
+			if err := mf.Close(); err != nil {
+				log.Printf("Aviso: error cerrando archivo mensual: %v", err)
+			}
+		}
+	}()
+
+	// Procesar cada archivo
+	for _, file := range files {
+		if file.IsDir() || procesados[file.Name()] {
+			if !file.IsDir() {
+				omitidos++
+			}
+			continue
+		}
+
+		// Comprobar si el monitor tiene el archivo bloqueado
+		testLockF, err := os.OpenFile(filepath.Join(cfg.LogDir, file.Name()), os.O_RDONLY, 0)
+		if err == nil {
+			// Intentamos obtener un lock compartido. Si falla (EWOULDBLOCK), el monitor lo tiene.
+			errLock := syscall.Flock(int(testLockF.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+			if errLock != nil {
+				testLockF.Close()
+				omitidos++
+				continue
+			}
+			syscall.Flock(int(testLockF.Fd()), syscall.LOCK_UN)
+			testLockF.Close()
+		}
+
+		matches := re.FindStringSubmatch(file.Name())
+		if len(matches) < 3 {
+			omitidos++
+			continue
+		}
+		anio, mes := matches[1], matches[2]
+
+		// Reemplaza la carga masiva en memoria por un streaming línea por línea
+		inFile, err := os.Open(filepath.Join(cfg.LogDir, file.Name()))
+		if err != nil {
+			log.Printf("Aviso: no se pudo abrir log %s: %v", file.Name(), err)
+			erroresProcesamiento++
+			continue
+		}
+
+		// Inicializar descriptores mensuales
+		mensualPath := filepath.Join(cfg.HistorialDir, fmt.Sprintf("%s-%s.txt", anio, mes))
+		mf, existe := archivosMensuales[mensualPath]
+		if !existe {
+			mf, err = os.OpenFile(mensualPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				log.Printf("Aviso: no se pudo abrir %s: %v", mensualPath, err)
+				inFile.Close()
+				erroresProcesamiento++
+				continue
+			}
+			archivosMensuales[mensualPath] = mf
+		}
+
+		// Capturar tamaños originales para rollback en caso de fallo
+		statMf, err := mf.Stat()
+		if err != nil {
+			log.Printf("Aviso: no se pudo obtener stat del historial mensual: %v", err)
+			inFile.Close()
+			erroresProcesamiento++
+			continue
+		}
+		mfOrigSize := statMf.Size()
+
+		statMaster, err := masterF.Stat()
+		if err != nil {
+			log.Printf("Aviso: no se pudo obtener stat del log maestro: %v", err)
+			inFile.Close()
+			erroresProcesamiento++
+			continue
+		}
+		masterOrigSize := statMaster.Size()
+
+		// Procesar y escribir al vuelo
+		scanner := bufio.NewScanner(inFile)
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024) // Capacidad hasta 1MB por línea
+		var writeErr error
+		for scanner.Scan() {
+			cleanLine := strings.Map(func(r rune) rune {
+				if r == 0 || r == '\r' {
+					return -1
+				}
+				return r
+			}, scanner.Text())
+
+			if _, err := mf.WriteString(cleanLine + "\n"); err != nil {
+				writeErr = err
+				break
+			}
+			if _, err := masterF.WriteString(cleanLine + "\n"); err != nil {
+				writeErr = err
+				break
+			}
+		}
+		scanErr := scanner.Err()
+		inFile.Close()
+
+		var failed bool
+
+		if writeErr != nil {
+			log.Printf("Aviso: error de escritura procesando %s: %v", file.Name(), writeErr)
+			failed = true
+		} else if scanErr != nil {
+			log.Printf("ERROR de I/O leyendo log %s: %v", file.Name(), scanErr)
+			failed = true
+		} else {
+			// Si no hubo error, escribimos saltos de línea finales
+			if _, err := mf.WriteString("\n"); err != nil { failed = true }
+			if _, err := masterF.WriteString("\n"); err != nil { failed = true }
+			
+			// Si aún no hay error, hacemos el "Commit" en el archivo de control
+			if !failed {
+				if _, err := controlF.WriteString(file.Name() + "\n"); err != nil {
+					log.Printf("Aviso: no se pudo actualizar control de procesados: %v", err)
+					failed = true
+				}
+			}
+		}
+
+		// Rollback unificado: Si cualquier paso falló, revertimos
+		if failed {
+			log.Printf("Revirtiendo cambios de %s...", file.Name())
+			mf.Truncate(mfOrigSize)
+			masterF.Truncate(masterOrigSize)
+			erroresProcesamiento++
+			continue
+		}
+
+		nuevosProcesados++
+	}
+
+	fmt.Printf("Procesados %d archivos nuevos, %d omitidos, %d errores.\n", nuevosProcesados, omitidos, erroresProcesamiento)
+
+	// Cierre explícito de descriptores para liberar inodos antes de comprimir/borrar
+	for path, mf := range archivosMensuales {
+		mf.Close()
+		delete(archivosMensuales, path)
+	}
+
+	compressOldLogs(cfg)
+}
+
+// compressOldLogs comprime archivos de log que no son recientes
+func compressOldLogs(cfg config.Config) {
+	files, err := os.ReadDir(cfg.HistorialDir)
+	if err != nil {
+		log.Printf("Aviso: no se pudo leer historial para compresión: %v", err)
+		return
+	}
+
+	reMes := regexp.MustCompile(`^\d{4}-\d{2}$`) // Se compila 1 sola vez en memoria
+
+	for _, file := range files {
+		if filepath.Ext(file.Name()) != ".txt" {
+			continue
+		}
+
+		nombreMes := strings.TrimSuffix(file.Name(), ".txt")
+		
+		// Validar que el nombre del archivo sea exactamente YYYY-MM (7 caracteres)
+		// y cumpla con el formato antes de procesarlo.
+		if len(nombreMes) != 7 || !reMes.MatchString(nombreMes) {
+			continue
+		}
+		esReciente := false
+
+		// Verificar si es uno de los últimos meses
+		now := time.Now()
+		refTime := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		for i := 0; i < cfg.MesesSinComprimir; i++ {
+			ref := refTime.AddDate(0, -i, 0).Format("2006-01")
+			if nombreMes == ref {
+				esReciente = true
+				break
+			}
+		}
+
+		if !esReciente {
+			fullPath := filepath.Join(cfg.HistorialDir, file.Name())
+			gzPath := fullPath + ".gz"
+
+			targetGz := gzPath
+			if _, err := os.Stat(targetGz); err == nil {
+				targetGz = fmt.Sprintf("%s_%s.gz", fullPath, time.Now().Format("150405"))
+			}
+
+			if err := gzipFile(fullPath, targetGz); err == nil {
+				if err := os.Remove(fullPath); err != nil {
+					log.Printf("Aviso: no se pudo borrar archivo sin comprimir %s: %v", fullPath, err)
+				}
+				log.Printf("Comprimido: %s -> %s", file.Name(), filepath.Base(targetGz))
+			} else {
+				log.Printf("Aviso: no se pudo comprimir %s: %v", fullPath, err)
+			}
+		}
+	}
+}
+
+// gzipFile comprime un archivo con gzip de forma segura
+func gzipFile(src, dst string) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	tmpDst := dst + ".tmp"
+	d, err := os.Create(tmpDst)
+	if err != nil {
+		return err
+	}
+
+	w := gzip.NewWriter(d)
+	if _, err := io.Copy(w, f); err != nil {
+		w.Close()
+		d.Close()
+		os.Remove(tmpDst)
+		return err
+	}
+
+	if err := w.Close(); err != nil {
+		d.Close()
+		os.Remove(tmpDst)
+		return err
+	}
+
+	if err := d.Close(); err != nil {
+		os.Remove(tmpDst)
+		return err
+	}
+
+	if err := os.Rename(tmpDst, dst); err != nil {
+		os.Remove(tmpDst)
+		return err
+	}
+
+	return nil
+}
+
+// acquireLock obtiene un lock exclusivo para el organizador
+func acquireLock(lockPath string) (func(), error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		lockF, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err == nil {
+			if _, wErr := lockF.WriteString(strconv.Itoa(os.Getpid())); wErr != nil {
+				lockF.Close()
+				os.Remove(lockPath)
+				return nil, fmt.Errorf("no se pudo escribir lock file: %w", wErr)
+			}
+			if cErr := lockF.Close(); cErr != nil {
+				os.Remove(lockPath)
+				return nil, fmt.Errorf("no se pudo cerrar lock file: %w", cErr)
+			}
+			return func() {
+				if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+					log.Printf("Aviso: no se pudo eliminar lock file: %v", err)
+				}
+			}, nil
+		}
+
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("no se pudo crear lock file: %w", err)
+		}
+
+		// Lock existente, verificar si el proceso sigue vivo
+		pidBytes, rErr := os.ReadFile(lockPath)
+		if rErr != nil {
+			return nil, fmt.Errorf("lock existente y no legible (%s): %w", lockPath, rErr)
+		}
+
+		pidStr := strings.TrimSpace(string(pidBytes))
+		pid, pErr := strconv.Atoi(pidStr)
+		if pErr != nil || pid <= 0 {
+			return nil, fmt.Errorf("lock en estado inconsistente o en creación: %w", pErr)
+		}
+
+		if isProcessAlive(pid) {
+			return nil, fmt.Errorf("ya hay una instancia corriendo (PID %d)", pid)
+		}
+
+		// Limpiar lock huérfano
+		if rmErr := os.Remove(lockPath); rmErr != nil {
+			return nil, fmt.Errorf("lock huérfano detectado pero no se pudo limpiar: %w", rmErr)
+		}
+	}
+
+	return nil, fmt.Errorf("no se pudo adquirir lock")
+}
+
+// isProcessAlive verifica si un proceso con PID está vivo y es gobat
+func isProcessAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+
+	// Solo si el proceso no existe liberamos el lock
+	if err != nil && errors.Is(err, syscall.ESRCH) {
+		return false
+	}
+
+	// Resolución absoluta del ejecutable (agnóstico al nombre del binario)
+	myExe, errExe := os.Executable()
+	if errExe == nil {
+		pidExePath := fmt.Sprintf("/proc/%d/exe", pid)
+		pidExe, errLink := os.Readlink(pidExePath)
+
+		// Si leemos el enlace y apunta a otro binario distinto al nuestro, es un PID reciclado
+		if errLink == nil && pidExe != myExe {
+			return false
+		}
+		// Si ocurre os.ErrNotExist, el proceso murió justo ahora
+		if errors.Is(errLink, os.ErrNotExist) {
+			return false
+		}
+	}
+
+	// Permisos denegados u otros errores, asumimos vivo por seguridad
+	return true
+}
+</file>
+
+<file path="internal/system/system.go">
+package system
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"gobat/internal/utils"
+)
+
+// BatteryInfo contiene información de la batería
+type BatteryInfo map[string]string
+
+// SystemInfo contiene información del sistema
+type SystemInfo map[string]string
+
+// BatteryFields son los campos principales de la batería
+var BatteryFields = []string{
+	"state",
+	"percentage",
+	"time to empty",
+	"time to full",
+	"energy-rate",
+	"energy",
+	"voltage",
+	"energy-full",
+	"energy-full-design",
+	"charge-cycles",
+	"capacity",
+	"temperature",
+}
+
+// DetectBattery encuentra la ruta de la batería usando upower
+func DetectBattery() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "upower", "-e").Output()
+	if err != nil {
+		return "", fmt.Errorf("no se pudo ejecutar upower: %w", err)
+	}
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), "battery") {
+			return strings.TrimSpace(line), nil
+		}
+	}
+	return "", fmt.Errorf("no se encontró batería")
+}
+
+// GetBatteryInfo obtiene información de la batería desde upower
+func GetBatteryInfo(path string) BatteryInfo {
+	m := make(BatteryInfo)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "upower", "-i", path).Output()
+	if err != nil {
+		return m
+	}
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		for _, field := range BatteryFields {
+			if strings.HasPrefix(trimmed, field+":") {
+				parts := strings.SplitN(trimmed, ":", 2)
+				if len(parts) == 2 {
+					key := strings.TrimSpace(parts[0])
+					val := strings.TrimSpace(parts[1])
+					m[key] = val
+				}
+				break
+			}
+		}
+	}
+
+	enrichBatteryInfo(m)
+	return m
+}
+
+// GetSystemInfo obtiene información del sistema (CPU, memoria, procesos, etc)
+func GetSystemInfo() SystemInfo {
+	out := make(SystemInfo)
+
+	// CPU frequency
+	out["current_frequency"] = getProcessorFrequency()
+
+	// CPU temperature
+	if t, err := utils.ReadIntFileToFloat("/sys/class/thermal/thermal_zone0/temp", 1000.0); err == nil {
+		out["cpu_temp"] = fmt.Sprintf("%.0f°C", t)
+	} else {
+		out["cpu_temp"] = "unknown"
+	}
+
+	// Load average
+	if b, err := os.ReadFile("/proc/loadavg"); err == nil {
+		parts := strings.Fields(string(b))
+		if len(parts) >= 1 {
+			out["load_avg (1min)"] = parts[0]
+		} else {
+			out["load_avg (1min)"] = "unknown"
+		}
+	} else {
+		out["load_avg (1min)"] = "unknown"
+	}
+
+	// Thermal throttling
+	out["thermal_throttling"] = getThermalThrottling()
+
+	// NVIDIA GPU status
+	out["nvidia_gpu"] = getNVIDIAStatus()
+
+	// Memory usage
+	out["used"] = getMemoryUsage()
+
+	// Swap usage
+	out["swap_used"] = getSwapUsage()
+
+	// Display brightness
+	out["brightness"] = getDisplayBrightness()
+
+	// Top processes
+	top := getTopProcesses()
+	for i, proc := range top {
+		out[fmt.Sprintf("top%d", i+1)] = proc
+	}
+
+	// WiFi status
+	out["wifi"] = getWiFiStatus()
+
+	// Bluetooth status
+	out["bluetooth"] = getBluetoothStatus()
+
+	return out
+}
+
+// --- FUNCIONES INTERNAS ---
+
+func getProcessorFrequency() string {
+	paths := []struct{ cur, max string }{
+		{"/sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq", "/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq"},
+		{"/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", "/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"},
+	}
+
+	for _, p := range paths {
+		cur, err := utils.ReadIntFile(p.cur)
+		if err != nil {
+			continue
+		}
+
+		max, err2 := utils.ReadIntFile(p.max)
+		if err2 == nil && max > 0 {
+			curGHz := float64(cur) / 1e6
+			maxGHz := float64(max) / 1e6
+			return fmt.Sprintf("%.1f GHz / %.1f GHz max", curGHz, maxGHz)
+		}
+		return fmt.Sprintf("%d kHz", cur)
+	}
+
+	return "unknown"
+}
+
+func getNVIDIAStatus() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=utilization.gpu,memory.used", "--format=csv,noheader,nounits").Output()
+	if err != nil {
+		return "off (integrated only)"
+	}
+
+	parts := strings.Split(strings.TrimSpace(string(out)), ",")
+	if len(parts) < 2 {
+		return "on (unknown state)"
+	}
+
+	util := strings.TrimSpace(parts[0])
+	memUsed := strings.TrimSpace(parts[1])
+	if util == "0" {
+		return fmt.Sprintf("on (idle, %s MB used)", memUsed)
+	}
+	return fmt.Sprintf("on (%s%% util, %s MB used)", util, memUsed)
+}
+
+func getMemoryUsage() string {
+	mem, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return "unknown"
+	}
+
+	var memTotal, memAvailable int64
+	for _, line := range strings.Split(string(mem), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			f := strings.Fields(line)
+			if len(f) >= 2 {
+				if v, err := strconv.ParseInt(f[1], 10, 64); err == nil {
+					memTotal = v
+				}
+			}
+		}
+		if strings.HasPrefix(line, "MemAvailable:") {
+			f := strings.Fields(line)
+			if len(f) >= 2 {
+				if v, err := strconv.ParseInt(f[1], 10, 64); err == nil {
+					memAvailable = v
+				}
+			}
+		}
+	}
+
+	if memTotal > 0 && memAvailable >= 0 {
+		usedKB := memTotal - memAvailable
+		usedGB := float64(usedKB) / (1024.0 * 1024.0)
+		totalGB := float64(memTotal) / (1024.0 * 1024.0)
+		return fmt.Sprintf("%.1f GB / %.0f GB (%.0f%%)", usedGB, totalGB, (usedGB/totalGB)*100)
+	}
+	return "unknown"
+}
+
+func getSwapUsage() string {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return "unknown"
+	}
+
+	if used, ok := utils.ParseSwapUsed(string(data)); ok {
+		return fmt.Sprintf("%d MB", used)
+	}
+	return "unknown"
+}
+
+func getDisplayBrightness() string {
+	backlightDir := "/sys/class/backlight"
+	entries, err := os.ReadDir(backlightDir)
+	if err != nil {
+		return "unknown"
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || (entry.Type()&os.ModeSymlink != 0) {
+			brightnessPath := fmt.Sprintf("%s/%s/brightness", backlightDir, entry.Name())
+			maxPath := fmt.Sprintf("%s/%s/max_brightness", backlightDir, entry.Name())
+
+			brightness, err1 := utils.ReadIntFile(brightnessPath)
+			max, err2 := utils.ReadIntFile(maxPath)
+
+			if err1 == nil && err2 == nil && max > 0 {
+				percentage := int((brightness * 100) / max)
+				return fmt.Sprintf("%d%%", percentage)
+			}
+		}
+	}
+	return "unknown"
+}
+
+func getWiFiStatus() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "nmcli", "radio", "wifi").Output()
+	if err != nil {
+		return "unknown"
+	}
+
+	if strings.TrimSpace(string(out)) != "enabled" {
+		return "off"
+	}
+
+	out2, err2 := exec.CommandContext(ctx, "nmcli", "-t", "connection", "show", "--active").Output()
+	if err2 != nil {
+		return "on (disconnected)"
+	}
+
+	for _, line := range strings.Split(string(out2), "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) >= 3 && strings.Contains(fields[2], "802-11") {
+			return "on (connected)"
+		}
+	}
+	return "on (disconnected)"
+}
+
+func getBluetoothStatus() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "bluetoothctl", "show").Output()
+	if err != nil {
+		return "unknown"
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "Powered:") {
+			if strings.Contains(line, "yes") {
+				return "on"
+			} else if strings.Contains(line, "no") {
+				return "off"
+			}
+		}
+	}
+	return "unknown"
+}
+
+func getTopProcesses() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "aux", "--sort=-pcpu").Output()
+	if err != nil {
+		return []string{"unavailable", "unavailable", "unavailable", "unavailable", "unavailable"}
+	}
+
+	selfPID := strconv.Itoa(os.Getpid())
+
+	lines := strings.Split(string(out), "\n")
+	var topProcesses []string
+
+	for i := 1; i < len(lines) && len(topProcesses) < 5; i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 11 {
+			continue
+		}
+
+		pid := fields[1]
+		if pid == selfPID {
+			continue
+		}
+		cpuPercent := fields[2]
+		memRSS := fields[5]
+		command := filepath.Base(fields[10])
+
+		memKB, err := strconv.ParseInt(memRSS, 10, 64)
+		if err != nil {
+			memKB = 0
+		}
+		memMB := memKB / 1024
+
+		processInfo := fmt.Sprintf("%d. %s : %s%% (%d MB) (PID: %s)", len(topProcesses)+1, command, cpuPercent, memMB, pid)
+		topProcesses = append(topProcesses, processInfo)
+	}
+
+	for len(topProcesses) < 5 {
+		topProcesses = append(topProcesses, "unavailable")
+	}
+
+	return topProcesses[:5]
+}
+
+func enrichBatteryInfo(m BatteryInfo) {
+	current, currentOK := parseBatteryFloat(m["energy-full"])
+	design, designOK := parseBatteryFloat(m["energy-full-design"])
+	if currentOK && designOK && design > 0 {
+		wearLevel := ((design - current) / design) * 100
+		if wearLevel < 0 {
+			wearLevel = 0
+		}
+		if wearLevel > 100 {
+			wearLevel = 100
+		}
+		m["wear_level"] = fmt.Sprintf("%.1f%%", wearLevel)
+	} else {
+		m["wear_level"] = "unknown"
+	}
+
+	const maxCycles = 500
+	cyclesValue, ok := m["charge-cycles"]
+	if !ok || strings.TrimSpace(cyclesValue) == "" {
+		m["cycles_remaining"] = "unknown"
+		return
+	}
+
+	cycles, err := strconv.Atoi(strings.TrimSpace(cyclesValue))
+	if err != nil || cycles < 0 {
+		m["cycles_remaining"] = "N/A"
+		return
+	}
+
+	remaining := maxCycles - cycles
+	if remaining < 0 {
+		remaining = 0
+	}
+	yearsEst := float64(remaining) / 365.0
+	m["cycles_remaining"] = fmt.Sprintf("%d (est. %.1f years)", remaining, yearsEst)
+}
+
+func parseBatteryFloat(value string) (float64, bool) {
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return 0, false
+	}
+
+	parsed, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func getThermalThrottling() string {
+	// El escalado de energía (Idle) reduce la frecuencia, no implica Throttling.
+	// La detección real requiere lectura de MSRs o cooling_devices con privilegios elevados.
+	return "unavailable (requires root/msr)"
+}
+</file>
+
+<file path="internal/utils/utils.go">
+package utils
+
+import (
+	"os"
+	"strconv"
+	"strings"
+)
+
+// ReadIntFile lee un archivo que contiene un entero
+func ReadIntFile(path string) (int64, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	s := strings.TrimSpace(string(b))
+	if s == "" {
+		return 0, os.ErrInvalid
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
+// ReadIntFileToFloat lee un archivo con entero y lo convierte a float dividiendo
+func ReadIntFileToFloat(path string, div float64) (float64, error) {
+	v, err := ReadIntFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return float64(v) / div, nil
+}
+
+// ParseSwapUsed extrae el uso de swap de /proc/meminfo
+func ParseSwapUsed(data string) (int, bool) {
+	var total, free int64
+	for _, line := range strings.Split(data, "\n") {
+		if strings.HasPrefix(line, "SwapTotal:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				if v, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+					total = v
+				}
+			}
+		}
+		if strings.HasPrefix(line, "SwapFree:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				if v, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+					free = v
+				}
+			}
+		}
+	}
+	if total == 0 {
+		return 0, false
+	}
+	usedKB := total - free
+	if usedKB < 0 {
+		usedKB = 0
+	}
+	usedMB := int((usedKB + 512) / 1024)
+	return usedMB, true
+}
+</file>
+
+<file path="ARQUITECTURA.md">
+# 🏗️ Arquitectura y Guía de Desarrollo
+
+## Visión General
+
+GoBat está diseñado con una **arquitectura modular y limpia** siguiendo principios de:
+- **Separación de responsabilidades**
+- **Fácil testabilidad**
+- **Bajo acoplamiento**
+
+## Capas de la Aplicación
+
+```
+┌─────────────────────────────────────┐
+│      cmd/gobat/main.go              │  ← Punto de entrada
+│   (Orquestación de modos)           │
+└──────────────┬──────────────────────┘
+               │
+        ┌──────┴──────┐
+        ▼              ▼
+    ┌────────────┐  ┌────────────┐
+    │  MONITOR   │  │ ORGANIZER  │
+    │  monitor/  │  │organizer/  │
+    └────┬───────┘  └────┬───────┘
+         │                │
+         └────────┬───────┘
+                  ▼
+        ┌────────────────────┐
+        │   SYSTEM (datos)   │  ← Recopila datos
+        │    system/         │
+        └────────┬───────────┘
+                 │
+        ┌────────┴──────────┐
+        ▼                   ▼
+    ┌────────────┐    ┌──────────────┐
+    │  UTILS     │    │   CONFIG     │
+    │ utils/     │    │  config/     │
+    └────────────┘    └──────────────┘
+```
+## Flujos Principales
+
+### Flujo 1: Monitoreo (`-mode=log`)
+
+```
+main()
+  ├─> config.Load()
+  ├─> monitor.Run(cfg)
+  │    ├─> system.DetectBattery()  # Encuentra ruta de batería
+  │    ├─> Crea archivo de log
+  │    ├─> Loop cada N segundos:
+  │    │    ├─> system.GetBatteryInfo()
+  │    │    ├─> system.GetSystemInfo()
+  │    │    ├─> Construye entrada de log
+  │    │    └─> Escribe a archivo
+  │    └─> (Espera Ctrl+C)
+  └─> Fin
+```
+
+### Flujo 2: Organización (`-mode=organize`)
+
+```
+main()
+  ├─> config.Load()
+  ├─> organizer.Run(cfg)
+  │    ├─> organizer.acquireLock()  # Evita concurrencia
+  │    ├─> Lee control de procesados
+  │    ├─> Para cada log sin procesar:
+  │    │    ├─> Lee contenido
+  │    │    ├─> Escribe en historial mensual
+  │    │    ├─> Escribe en maestro
+  │    │    └─> Marca como procesado
+  │    ├─> organizer.compressOldLogs()  # Comprime meses antiguos
+  │    └─> Libera lock
+  └─> Fin
+```
+
+## Módulos en Detalle
+
+### 📦 `internal/config` - Configuración
+
+**Responsabilidad**: Centralizar configuración
+
+**Exports**:
+- `Config` struct
+- `Load()` func
+
+**Uso**:
+```go
+cfg := config.Load()
+fmt.Println(cfg.LogDir)  // "/path/to/logs/logs"
+```
+
+**Campos importantes**:
+- `LogDir`: Directorio de logs de sesión
+- `HistorialDir`: Directorio de logs mensuales
+- `MasterLog`: Log consolidado
+- `IntervaloSegundos`: Frecuencia de muestreo
+
+---
+
+### 🖥️ `internal/system` - Datos del Sistema
+
+**Responsabilidad**: Recopilar información del sistema
+
+**Exports**:
+- `BatteryInfo` (type = map[string]string)
+- `SystemInfo` (type = map[string]string)
+- `DetectBattery()` - Encuentra batería con upower
+- `GetBatteryInfo()` - Obtiene datos de batería
+- `GetSystemInfo()` - Obtiene CPU, memoria, GPU, procesos, etc.
+
+**Estructura interna**:
+```
+system/
+├─ Public functions (GetBatteryInfo, GetSystemInfo)
+├─ Helper functions (private)
+│  ├─ getProcessorFrequency()
+│  ├─ getNVIDIAStatus()
+│  ├─ getMemoryUsage()
+│  ├─ getSwapUsage()
+│  ├─ getDisplayBrightness()
+│  ├─ getWiFiStatus()
+│  ├─ getBluetoothStatus()
+│  └─ getTopProcesses()
+```
+
+**Ejecución**:
+```go
+sys := system.GetSystemInfo()
+cpu_freq := sys["current_frequency"]  // "2.4 GHz / 4.0 GHz max"
+mem := sys["used"]                    // "4.2 GB / 8 GB (53%)"
+```
+
+---
+
+### 📊 `internal/monitor` - Monitor de Batería
+
+**Responsabilidad**: Loop continuo de monitoreo y registro
+
+**Exports**:
+- `Run(cfg)` - Punto de entrada del modo monitor
+
+**Internals**:
+- `buildLogEntry()` - Construye una entrada formateada del log
+- `getOrDefault()` - Helper para valores con fallback
+
+**Flujo**:
+1. Detecta batería
+2. Crea archivo de log con timestamp
+3. Escribe encabezados
+4. Loop infinito cada N segundos:
+   - Recopila datos con `system.Get*()`
+   - Formatea como texto
+   - Escribe a archivo
+   - `fsync()` para garantizar persistencia
+5. Captura Ctrl+C y escribe pie de archivo
+
+---
+
+### 📁 `internal/organizer` - Organizador de Logs
+
+**Responsabilidad**: Consolidar y comprimir logs
+
+**Exports**:
+- `Run(cfg)` - Punto de entrada del modo organizador
+
+**Internals**:
+- `compressOldLogs()` - Comprime archivos de más de N meses
+- `gzipFile()` - Comprime un archivo atomáticamente
+- `acquireLock()` - Obtiene lock exclusivo
+- `isProcessAlive()` - Verifica si un PID está vivo
+
+**Features importantes**:
+- **Atomicidad**: Usa archivo `.tmp` durante compresión
+- **Idempotencia**: Verifica qué ya fue procesado
+- **Concurrencia**: Lock file previene ejecuciones paralelas
+- **Recuperación**: Detecta y limpia locks huérfanos
+
+---
+
+### 🔧 `internal/utils` - Utilidades
+
+**Responsabilidad**: Funciones compartidas reutilizables
+
+**Exports**:
+- `ReadIntFile(path)` - Lee entero de archivo
+- `ReadIntFileToFloat(path, divisor)` - Lee y convierte a float
+- `ParseSwapUsed(data)` - Parsea /proc/meminfo
+- `AppendToFile(path, line)` - Añade línea a archivo
+
+**Uso**:
+```go
+freq, _ := utils.ReadIntFile("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+temp, _ := utils.ReadIntFileToFloat("/sys/class/thermal/thermal_zone0/temp", 1000.0)
+```
+
+---
+
+## Patrón de Dependencias
+
+```
+cmd/gobat/main.go
+  ├─> internal/config
+  ├─> internal/monitor
+  │    ├─> internal/config
+  │    └─> internal/system
+  │         ├─> internal/utils
+  │         └─> os/exec (comandos del sistema)
+  └─> internal/organizer
+       ├─> internal/config
+       ├─> internal/utils
+       └─> compress/gzip
+```
+
+**Regla de oro**: Los módulos inferiores NO importan superiores (no hay dependencias circulares).
+
+---
+
+## Cómo Extender
+
+### 1. Agregar un nuevo dato del sistema
+
+**Ubicación**: `internal/system/system.go` en `GetSystemInfo()`
+
+```go
+// En GetSystemInfo()
+out["new_metric"] = getNewMetric()
+
+// Agregar función helper
+func getNewMetric() string {
+    // Lógica aquí
+    return "value"
+}
+```
+
+**Luego en monitor**:
+```go
+// En buildLogEntry(), agregar sección
+b.WriteString("\nNew Section:\n")
+b.WriteString(fmt.Sprintf("  %-24s : %s\n", "metric", getOrDefault(sys, "new_metric")))
+```
+
+---
+
+### 2. Cambiar frecuencia de muestreo
+
+**Ubicación**: `internal/config/config.go`
+
+```go
+IntervaloSegundos: 30,  // Cambiar aquí
+```
+
+---
+
+### 3. Cambiar período de compresión
+
+**Ubicación**: `internal/config/config.go`
+
+```go
+MesesSinComprimir: 3,  // Comprimir meses con más de 3 meses de antigüedad
+```
+
+---
+
+### 4. Agregar nuevo modo
+
+**Ubicación**: `cmd/gobat/main.go` y nuevo módulo en `internal/`
+
+```go
+// cmd/gobat/main.go
+case "mymode":
+    mymodule.Run(cfg)
+
+// internal/mymodule/mymodule.go
+package mymodule
+
+func Run(cfg config.Config) {
+    // Tu lógica aquí
+}
+```
+
+---
+
+## Testabilidad
+
+### Principios
+
+1. **Funciones puras donde sea posible** - Facilita testing
+2. **Inyección de dependencias** - Paso de `Config` como parámetro
+3. **Evitar side effects globales** - Todas las operaciones usan rutas del Config
+
+### Escribir un test nuevo
+
+```go
+// tests/mymodule_test.go
+package mymodule
+
+import (
+    "testing"
+    "os"
+    "path/filepath"
+)
+
+func TestMyFeature(t *testing.T) {
+    // Setup
+    tmpDir := t.TempDir()  // Directorio temporal automático
+    
+    // Execute
+    // Tu código aquí
+    
+    // Verify
+    if err != nil {
+        t.Fatalf("error: %v", err)
+    }
+}
+```
+
+**Ejecutar**:
+```bash
+go test ./...
+```
+
+---
+
+## Performance y Optimization
+
+1. **Sync de archivos**: Se usa `fsync()` después de cada log para garantizar persistencia
+2. **Compresión incremental**: Solo comprime archivos nuevos (guarda en `archivos_procesados.txt`)
+3. **Lock files**: Previene múltiples instancias organizando simultáneamente
+4. **Lectura eficiente**: Lee `/proc/` directamente en lugar de comandos del sistema (cuando es posible)
+
+---
+
+## Errores Comunes y Cómo Evitarlos
+
+| Error | Causa | Solución |
+|-------|-------|----------|
+| "no se encontró batería" | `upower` no devuelve salida | Instalar `upower` |
+| "ya hay una instancia corriendo" | Lock file obsoleto | Borrar `.organizar.lock` |
+| Tests fallan | Falta compilar | `go build ./cmd/gobat` primero |
+| Permisos denegados | Acceso a `/sys` sin permisos | Normal, devuelve "placeholder" |
+| Archivos sin comprimir | Archivo es "reciente" | Cambiar `MesesSinComprimir` |
+
+---
+
+## Roadmap de Refactorización Completado ✅
+
+- ✅ Separar config en módulo
+- ✅ Separar monitor en módulo
+- ✅ Separar organizer en módulo
+- ✅ Crear módulo de sistema
+- ✅ Crear módulo de utilidades
+- ✅ Mover main a `cmd/gobat`
+- ✅ Documentación clara
+- ✅ Tests reorganizados
+
+---
+
+**Última actualización**: 9 de mayo de 2026
+</file>
+
+<file path="go.mod">
+module gobat
+
+go 1.22
+</file>
+
+<file path="QUICK_REFERENCE.md">
+# 🚀 Quick Reference - Hoja de Trucos
+
+Comandos y operaciones más comunes. ¡Copia y pega!
+
+---
+
+## 💻 Compilación y Ejecución
+
+```bash
+# Compilar
+go build -o gobat ./cmd/gobat
+
+# Monitor (registra cada 10 segundos)
+./gobat -mode=log
+
+# Organizador (consolida y comprime)
+./gobat -mode=organize
+
+# Monitor con timeout (5 minutos)
+timeout 300 ./gobat -mode=log
+
+# Monitor en background
+./gobat -mode=log &
+
+# Ver proceso
+ps aux | grep gobat
+```
+
+---
+
+## 📂 Navegación de Archivos
+
+```bash
+# Ver estructura
+tree -L 2 -I 'logs_*|archivos_*' .
+
+# Ver logs diarios
+ls -lh logs/logs/ | tail -10
+cat logs/logs/log_*.txt | head -50
+
+# Ver logs mensuales
+ls -lh logs/logs_historial/
+
+# Ver log maestro consolidado
+tail -100 logs/logs_todo.txt
+
+# Ver qué ya fue procesado
+cat logs/archivos_procesados.txt
+
+# Contar entradas de log
+wc -l logs/logs_todo.txt
+
+# Buscar en logs (por ejemplo, "charging")
+grep -r "charging" logs/
+
+# Ver últimas 50 líneas en tiempo real
+tail -f logs/logs_todo.txt
+```
+
+---
+
+## 🔧 Cambios Comunes
+
+### Cambiar intervalo de muestreo
+
+**Archivo**: `internal/config/config.go`
+
+```go
+// Opción rápida: Busca esta línea
+IntervaloSegundos: 10,
+
+// Cambios recomendados:
+IntervaloSegundos: 10,   # Rápido (16,000 entradas/día)
+IntervaloSegundos: 30,   # Equilibrado (2,880 entradas/día)  
+IntervaloSegundos: 60,   # Ahorro (1,440 entradas/día)
+```
+
+Luego:
+```bash
+go build -o gobat ./cmd/gobat
+./gobat -mode=log
+```
+
+### Cambiar meses sin comprimir
+
+**Archivo**: `internal/config/config.go`
+
+```go
+MesesSinComprimir: 2,    # Comprime después de 2 meses
+
+# Cambios comunes:
+MesesSinComprimir: 1,    # Comprime muy rápido
+MesesSinComprimir: 3,    # Mantiene más meses sin comprimir
+MesesSinComprimir: 6,    # Comprime solo lo muy viejo
+```
+
+---
+
+## 🧪 Testing
+
+```bash
+# Ejecutar todos los tests
+go test ./... -v
+
+# Tests con cobertura
+go test ./... -cover
+
+# Test específico
+go test ./internal/organizer -run TestAppendToFileCreatesAndAppends
+
+# Verbose output
+go test -v ./... 2>&1 | head -50
+```
+
+---
+
+## 🐛 Troubleshooting Rápido
+
+```bash
+# ❌ "no se encontró batería"
+upower -e
+# Si devuelve nada:
+sudo apt install upower -y
+
+# ❌ "ya hay una instancia corriendo"
+rm logs/.organizar.lock
+./gobat -mode=organize
+
+# ❌ Permisos denegados en /sys
+# Normal. Algunos datos devuelven "placeholder" sin permisos root
+
+# ❌ El binario no se crea
+go clean && go build -o gobat ./cmd/gobat
+
+# ❌ Tests fallan después de cambios
+go build -o gobat ./cmd/gobat  # Compila primero
+go test ./... -v                # Luego testa
+
+# ❌ Ver qué pasó
+dmesg | tail -20      # Mensajes del sistema
+systemctl status      # Estado de servicios
+```
+
+---
+
+## 📊 Módulos Rápido
+
+¿Dónde está cada cosa?
+
+```
+config/       ← Configuración
+monitor/      ← Monitoreo de batería
+organizer/    ← Organización de logs
+system/       ← Datos del sistema
+utils/        ← Funciones auxiliares
+```
+
+---
+
+## 🎯 Workflows Típicos
+
+### Workflow 1: Monitor Continuo 24/7
+
+```bash
+# Opción 1: Screen/tmux
+screen -S gobat
+./gobat -mode=log
+# Ctrl+A D para desconectar
+
+# Opción 2: systemd (si lo configuras)
+systemctl enable gobat
+systemctl start gobat
+
+# Opción 3: cron cada 5 minutos (poco práctico)
+*/5 * * * * /path/to/gobat -mode=organize
+```
+
+### Workflow 2: Monitor + Organizar
+
+```bash
+# Terminal 1: Monitor
+./gobat -mode=log &
+gobat_pid=$!
+
+# Terminal 2: Organizar cada hora
+while true; do
+    sleep 3600
+    ./gobat -mode=organize
+done
+
+# Ctrl+C en ambas para terminar
+kill $gobat_pid
+```
+
+### Workflow 3: Análisis de Logs
+
+```bash
+# Ver resumen diario
+cat logs/logs_todo.txt | grep "^---" | head -20
+
+# Ver solo estado de batería
+cat logs/logs_todo.txt | grep -A5 "Battery Status:"
+
+# Promedio de consumo
+cat logs/logs_todo.txt | grep "energy-rate" | \
+    sed 's/.*: //' | sed 's/ W//' | \
+    awk '{sum+=$1; count++} END {print "Promedio: " sum/count " W"}'
+
+# Batería mínima del día
+cat logs/logs_todo.txt | grep "percentage" | \
+    sed 's/.*: //' | sed 's/%//' | \
+    sort -n | head -1
+```
+
+---
+
+## 🔍 Debugging Rápido
+
+```bash
+# ¿Qué proceso está corriendo?
+ps aux | grep gobat
+
+# ¿Cuántas líneas tiene el log maestro?
+wc -l logs/logs_todo.txt
+
+# ¿Últimas 5 entradas?
+tail -100 logs/logs_todo.txt | head -50
+
+# ¿Tamaño de directorios?
+du -sh logs/logs/
+du -sh logs/logs_historial/
+
+# ¿Archivos comprimidos?
+ls -lh logs/logs_historial/*.gz
+
+# ¿Lock file activo?
+ls -la logs/.organizar.lock
+cat logs/.organizar.lock  # Ver PID
+ps aux | grep <PID>       # Ver si proceso existe
+
+# ¿Error al compilar?
+go build -o gobat ./cmd/gobat 2>&1 | head -10
+```
+
+---
+
+## 📈 Monitoreo de Uso de Disco
+
+```bash
+# Tamaño actual
+du -sh logs/
+
+# Crecimiento diario (aproximado)
+# Cada entrada ≈ 1-2 KB
+# Con intervalo de 10s: 8640 entradas/día ≈ 10-20 MB/día
+
+# Proyección a 1 año (sin comprimir)
+# 20 MB/día × 365 días = 7.3 GB
+
+# Con compresión cada 2 meses: 3-4x reducción
+```
+
+---
+
+## 🎨 Personalizaciones Populares
+
+### Cambiar formato de timestamp en logs
+
+**Archivo**: `internal/monitor/monitor.go`
+
+Busca:
+```go
+time.Now().Format("2006-01-02 15:04:05")
+```
+
+Cambia a:
+```go
+time.Now().Format("2006-01-02 15:04:05 MST")  # Añade zona horaria
+```
+
+### Agregar nuevo dato del sistema
+
+**Archivo**: `internal/system/system.go`
+
+1. Añade función que devuelve el dato:
+```go
+func getMyData() string {
+    // Tu código
+    return value
+}
+```
+
+2. Llámala en `GetSystemInfo()`:
+```go
+out["my_data"] = getMyData()
+```
+
+3. Muéstrala en `internal/monitor/monitor.go`:
+```go
+b.WriteString(fmt.Sprintf("  %-24s : %s\n", "my_data", getOrDefault(sys, "my_data")))
+```
+
+---
+
+## 🔗 Links Útiles Internos
+
+```bash
+# Leer documentación
+cat README.md                 # Guía principal
+cat ARQUITECTURA.md           # Cómo está organizado el código
+cat QUICK_REFERENCE.md        # Esta guía rápida
+cat CAMBIOS.md                # Historial de cambios
+```
+
+---
+
+## 💾 Backup y Recovery
+
+```bash
+# Backup completo
+cp -r logs logs.backup_$(date +%Y%m%d)
+
+# Restaurar
+cp -r logs.backup_20260509 logs
+
+# Limpiar logs antiguos (cuidado!)
+rm logs/logs_historial/*.gz   # Solo comprimidos
+
+# Limpiar todo (PELIGRO)
+rm -rf logs/*
+```
+
+---
+
+## ⚙️ Variables de Entorno (futuro)
+
+```bash
+# Podrían agregarse en el futuro:
+GOBAT_LOG_DIR=/custom/path
+GOBAT_INTERVAL=30
+GOBAT_COMPRESS_MONTHS=3
+
+# Uso:
+export GOBAT_INTERVAL=30
+./gobat -mode=log
+```
+
+---
+
+## 🎯 Recetas Prácticas
+
+### Receta 1: Monitorear y Notificar
+
+```bash
+#!/bin/bash
+./gobat -mode=log &
+while true; do
+    sleep 3600
+    percentage=$(tail -20 logs/logs_todo.txt | grep percentage | tail -1 | cut -d: -f2)
+    if [[ $(echo "$percentage < 20" | bc) == 1 ]]; then
+        notify-send "Batería baja: $percentage"
+    fi
+done
+```
+
+### Receta 2: Resumen Diario
+
+```bash
+#!/bin/bash
+echo "=== RESUMEN DE BATERÍA DEL DÍA ==="
+echo "Porcentaje mínimo:"
+cat logs/logs_todo.txt | grep percentage | sed 's/.*: //' | sort -n | head -1
+echo ""
+echo "Consumo promedio:"
+cat logs/logs_todo.txt | grep energy-rate | sed 's/.*: //' | sed 's/ W//' | \
+    awk '{sum+=$1; count++} END {print sum/count " W"}'
+```
+
+### Receta 3: Exportar a CSV
+
+```bash
+#!/bin/bash
+echo "timestamp,percentage,temp,frequency" > battery.csv
+cat logs/logs_todo.txt | grep -A10 "^---" | grep -E "(^---|percentage|cpu_temp|current_frequency)" | \
+    paste -d, - - - - >> battery.csv
+```
+
+---
+
+## 📚 Referencia Rápida de Comandos Go
+
+```bash
+# Formato de código
+go fmt ./cmd/gobat
+go fmt ./internal/...
+
+# Lint
+go vet ./cmd/gobat
+go vet ./internal/...
+
+# Docs locales
+godoc -http=:6060
+# Luego abre http://localhost:6060
+
+# Profiling (si quieres optimizar)
+go test -cpuprofile=cpu.prof ./tests/
+go tool pprof cpu.prof
+```
+
+---
+
+## 🚀 Deployment Rápido
+
+```bash
+# Build optimizado
+go build -ldflags="-s -w" -o gobat ./cmd/gobat
+
+# Ver tamaño
+ls -lh gobat
+
+# Ejecutable mucho más pequeño (sin symbols/debug)
+# Original: ~5-10 MB
+# Con -ldflags: ~3-5 MB
+```
+
+---
+
+## 📞 SOS - Si Todo Está Roto
+
+```bash
+# Paso 1: Verifica que Go está instalado
+go version
+
+# Paso 2: Limpia y reconstruye
+go clean
+go build -o gobat ./cmd/gobat
+
+# Paso 3: Verifica que upower existe
+which upower
+upower -e
+
+# Paso 4: Borra cache problemático
+rm -rf $HOME/go/pkg/mod/gobat*
+
+# Paso 5: Vuelve a compilar
+go build -o gobat ./cmd/gobat
+
+# Si aún falla: Consulta INDICE.md para links a documentación detallada
+```
+
+---
+
+**Guardá esta página para acceso rápido.** 🚀
+</file>
+
+<file path="README.md">
+# GoBat - Monitor de Batería para Linux
+
+Sistema modular y profesional en Go para monitorear batería en Linux, consolidar logs mensualmente y comprimir archivos automáticamente.
+
+## 🚀 Inicio Rápido
+
+```bash
+# Compilar
+go build -o gobat ./cmd/gobat
+
+# Monitor (registra datos cada 10 segundos)
+./gobat -mode=log
+
+# Organizador (consolida y comprime logs)
+./gobat -mode=organize
+```
+
+## ✨ Características
+
+- 📊 Monitorea batería continuamente (estado, porcentaje, energía-rate, voltaje)
+- 📁 Organiza logs de sesión en archivos mensuales
+- 📦 Comprime automáticamente archivos de más de 2 meses
+- 🖥️ Recopila datos del sistema (CPU, GPU, memoria, procesos, conectividad)
+- 🔒 Lock files previenen ejecuciones concurrentes
+- 📝 Modular y profesional (sin dependencias externas)
+
+## 📋 Requisitos
+
+- Go 1.22+
+- `upower` (para leer datos de batería)
+
+**Instalación de dependencias:**
+```bash
+# Ubuntu/Debian
+sudo apt install golang upower -y
+
+# Arch
+sudo pacman -S go upower
+```
+
+## 🏗️ Estructura
+
+```
+log_bateria_v3/
+├── cmd/gobat/
+│   └── main.go              # Punto de entrada
+├── internal/                # Módulos privados
+│   ├── config/              # Configuración
+│   ├── monitor/             # Monitoreo de batería
+│   ├── organizer/           # Organización y compresión
+│   ├── system/              # Datos del sistema
+│   └── utils/               # Utilidades compartidas
+├── tests/                   # Tests unitarios
+└── logs/                    # Logs (generado)
+```
+
+## 📖 Documentación
+
+| Documento | Contenido | Tiempo |
+|-----------|-----------|--------|
+| [QUICK_REFERENCE.md](QUICK_REFERENCE.md) | Comandos y trucos | ⏱️ 2 min |
+| [ARQUITECTURA.md](ARQUITECTURA.md) | Diseño y cómo extender | ⏱️ 20 min |
+| [CAMBIOS.md](CAMBIOS.md) | Estado de la refactorización y pendientes | ⏱️ 15 min |
+
+## 💻 Uso
+
+### Modo Monitor
+
+Registra datos de batería cada 10 segundos:
+
+```bash
+./gobat -mode=log
+```
+
+**Output**: `logs/logs/log_YYYY-MM-DD_HH-MM-SS.txt`
+
+Presiona `Ctrl+C` para terminar.
+
+### Modo Organize
+
+Consolida logs de sesión, agrupa por mes y comprime:
+
+```bash
+./gobat -mode=organize
+```
+
+**Output**:
+```
+Procesados 5 archivos nuevos, 0 omitidos, 0 errores.
+Comprimido: 2025-10.txt -> 2025-10.txt.gz
+```
+
+## 🛠️ Cambios Comunes
+
+### Cambiar intervalo de muestreo
+
+Edita `internal/config/config.go`:
+```go
+IntervaloSegundos: 10,  // Cambiar aquí (10, 30, 60 recomendado)
+```
+
+Recompila:
+```bash
+go build -o gobat ./cmd/gobat
+```
+
+### Agregar nuevo dato del sistema
+
+1. Edita `internal/system/system.go` - Agrega función
+2. Llámala en `GetSystemInfo()`
+3. Muéstrala en `internal/monitor/monitor.go`
+
+Ver detalles en [ARQUITECTURA.md](ARQUITECTURA.md#cómo-extender).
+
+## 🧪 Testing
+
+```bash
+go test ./...
+```
+
+## 🐛 Troubleshooting
+
+| Problema | Solución |
+|----------|----------|
+| "no se encontró batería" | `upower -e` y instala upower |
+| "ya hay una instancia corriendo" | `rm logs/.organizar.lock` |
+| El binario no se crea | `go clean && go build -o gobat ./cmd/gobat` |
+| Tests fallan | Primero compila, luego testa |
+
+Ver más en [QUICK_REFERENCE.md](QUICK_REFERENCE.md#-troubleshooting-rápido).
+
+## 📊 Módulos
+
+| Módulo | Responsabilidad | Líneas |
+|--------|-----------------|--------|
+| `config/` | Configuración centralizada | 40 |
+| `monitor/` | Loop de monitoreo | 140 |
+| `organizer/` | Organización y compresión | 200 |
+| `system/` | Datos del sistema | 350 |
+| `utils/` | Utilidades compartidas | 60 |
+
+## ✅ Refactorización Completada
+
+- ✅ Código modular (5 módulos independientes)
+- ✅ Sin dependencias externas
+- ✅ Documentación exhaustiva
+- ✅ Tests organizados
+- ✅ 100% compatible con versión anterior
+
+## 📚 Ver También
+
+- [CAMBIOS.md](CAMBIOS.md) - Lista de bugs revisados y estado
+- [ARQUITECTURA.md](ARQUITECTURA.md) - Diseño general del sistema
+
+---
+
+**Construido con ❤️ en Go | Última actualización: 9 de mayo de 2026**
+</file>
+
+</files>
