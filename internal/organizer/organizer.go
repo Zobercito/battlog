@@ -18,6 +18,7 @@ import (
 	"gobat/internal/rotator"
 )
 
+// Run ejecuta la organización con lock exclusivo (modo independiente)
 func Run(cfg config.Config) {
 	// Rotar logs viejos antes de procesar
 	if err := rotator.RotateLogs(cfg); err != nil {
@@ -31,6 +32,16 @@ func Run(cfg config.Config) {
 	}
 	defer releaseLock()
 
+	processSessionLogs(cfg)
+}
+
+// RunWithoutLock ejecuta la organización sin lock (para llamadas internas del monitor)
+func RunWithoutLock(cfg config.Config) {
+	processSessionLogs(cfg)
+}
+
+// processSessionLogs es el core de la organización: consolida sesiones en el log maestro
+func processSessionLogs(cfg config.Config) {
 	procesados := make(map[string]bool)
 	if f, err := os.Open(cfg.ControlFile); err == nil {
 		scanner := bufio.NewScanner(f)
@@ -55,7 +66,6 @@ func Run(cfg config.Config) {
 	}
 
 	if len(sessionPaths) == 0 {
-		fmt.Println("No hay logs de sesión nuevos.")
 		return
 	}
 
@@ -136,6 +146,7 @@ func Run(cfg config.Config) {
 		if writeErr != nil {
 			log.Printf("Aviso: error de escritura procesando %s: %v", fileName, writeErr)
 			masterF.Truncate(masterOrigSize)
+			masterF.Seek(masterOrigSize, 0)
 			erroresProcesamiento++
 			continue
 		}
@@ -143,6 +154,7 @@ func Run(cfg config.Config) {
 		if _, err := controlF.WriteString(fileName + "\n"); err != nil {
 			log.Printf("Aviso: no se pudo actualizar control de procesados: %v", err)
 			masterF.Truncate(masterOrigSize)
+			masterF.Seek(masterOrigSize, 0)
 			erroresProcesamiento++
 			continue
 		}
@@ -150,7 +162,9 @@ func Run(cfg config.Config) {
 		nuevosProcesados++
 	}
 
-	fmt.Printf("Procesados %d archivos nuevos, %d omitidos, %d errores.\n", nuevosProcesados, omitidos, erroresProcesamiento)
+	if nuevosProcesados > 0 {
+		fmt.Printf("Organizados %d archivos nuevos, %d omitidos, %d errores.\n", nuevosProcesados, omitidos, erroresProcesamiento)
+	}
 }
 
 func parseSessionJSON(path string) ([][]byte, error) {

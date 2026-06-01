@@ -243,7 +243,7 @@ func getDisplayBrightness() string {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || (entry.Type()&os.ModeSymlink != 0) {
+		if !entry.IsDir() {
 			brightnessPath := fmt.Sprintf("%s/%s/brightness", backlightDir, entry.Name())
 			maxPath := fmt.Sprintf("%s/%s/max_brightness", backlightDir, entry.Name())
 
@@ -340,7 +340,11 @@ func getTopProcesses() []string {
 		}
 		cpuPercent := fields[2]
 		memRSS := fields[5]
-		command := filepath.Base(fields[10])
+		commandName := fields[10]
+		if commandName == "" {
+			continue
+		}
+		command := filepath.Base(commandName)
 
 		memKB, err := strconv.ParseInt(memRSS, 10, 64)
 		if err != nil {

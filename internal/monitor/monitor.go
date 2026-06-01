@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gobat/internal/config"
+	"gobat/internal/organizer"
 	"gobat/internal/rotator"
 	"gobat/internal/system"
 )
@@ -138,6 +139,7 @@ func Run(cfg config.Config) {
 
 	// Primera entrada para no prepender coma
 	firstEntry := true
+	iteraciones := 0
 	ticker := time.NewTicker(time.Duration(cfg.IntervaloSegundos) * time.Second)
 	defer ticker.Stop()
 
@@ -164,6 +166,12 @@ func Run(cfg config.Config) {
 			if err := f.Sync(); err != nil {
 				log.Printf("Aviso: no se pudo sincronizar el log: %v", err)
 			}
+
+			// Organizar automáticamente cada N iteraciones
+			iteraciones++
+			if cfg.OrganizarCadaIteraciones > 0 && iteraciones%cfg.OrganizarCadaIteraciones == 0 {
+				organizer.RunWithoutLock(cfg)
+			}
 		case <-sigCh:
 			// Sincronizar datos pendientes antes de cerrar
 			if err := f.Sync(); err != nil {
@@ -183,11 +191,12 @@ func Run(cfg config.Config) {
 
 // buildLogEntryJSON construye una entrada del log en formato JSON
 func buildLogEntryJSON(batPath string) LogEntry {
+	now := time.Now()
 	bat := system.GetBatteryInfo(batPath)
 	sys := system.GetSystemInfo()
 	entry := LogEntry{
-		Timestamp: time.Now().Unix(),
-		Datetime:  time.Now().Format("2006-01-02 15:04:05"),
+		Timestamp: now.Unix(),
+		Datetime:  now.Format("2006-01-02 15:04:05"),
 	}
 
 	fillBatteryData(bat, sys, &entry)
@@ -337,7 +346,10 @@ func fillConnectivityData(sys map[string]string, entry *LogEntry) {
 
 // parseTimeToMinutes convierte tiempo "X.X hours" a minutos
 func parseTimeToMinutes(t string) int {
-	t = strings.TrimSpace(strings.Replace(t, "hours", "", 1))
+	t = strings.TrimSpace(t)
+	t = strings.TrimSuffix(t, "hours")
+	t = strings.TrimSuffix(t, "hour")
+	t = strings.TrimSpace(t)
 	if val, err := strconv.ParseFloat(t, 64); err == nil {
 		return int(val * 60)
 	}

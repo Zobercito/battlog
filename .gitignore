@@ -16,3 +16,6 @@ logs/archivos_procesados.txt
 # IDE
 .vscode/
 .idea/
+
+# Coverage
+coverage.out
