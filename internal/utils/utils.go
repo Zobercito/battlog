@@ -2,6 +2,7 @@ package utils
 
 import (
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -57,7 +58,7 @@ func ReadIntFile(path string) (int64, error) {
 	}
 	s := strings.TrimSpace(string(b))
 	if s == "" {
-		return 0, os.ErrInvalid
+		return 0, fmt.Errorf("archivo vacío: %s", path)
 	}
 	v, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
