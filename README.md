@@ -17,9 +17,8 @@ go build -o gobat ./cmd/gobat
 
 ## ✨ Características
 
-- 📊 Monitorea batería continuamente (estado, porcentaje, energía-rate, voltaje)
-- 📁 Organiza logs de sesión en archivos mensuales
-- 📦 Comprime automáticamente archivos de más de 2 meses
+- 📊 Monitorea batería continuamente (estado, porcentaje, energía-rate, voltaje, temperatura)
+- 📁 Logs de sesión en formato JSON, log maestro en JSONL (un objeto por línea)
 - 🖥️ Recopila datos del sistema (CPU, GPU, memoria, procesos, conectividad)
 - 🔒 Lock files previenen ejecuciones concurrentes
 - 📝 Modular y profesional (sin dependencias externas)
@@ -48,10 +47,14 @@ log_bateria_v3/
 │   ├── config/              # Configuración
 │   ├── monitor/             # Monitoreo de batería
 │   ├── organizer/           # Organización y compresión
+│   ├── rotator/             # Rotación y compresión de logs
 │   ├── system/              # Datos del sistema
 │   └── utils/               # Utilidades compartidas
 ├── tests/                   # Tests unitarios
 └── logs/                    # Logs (generado)
+    ├── current/             # Logs de sesión activos
+    ├── master/              # Logs maestro (JSONL por mes)
+    └── archive/             # Logs históricos comprimidos
 ```
 
 ## 📖 Documentación
@@ -72,13 +75,13 @@ Registra datos de batería cada 10 segundos:
 ./gobat -mode=log
 ```
 
-**Output**: `logs/logs/log_YYYY-MM-DD_HH-MM-SS.txt`
+**Output**: `logs/current/log_YYYY-MM-DD_HH-MM-SS.json`
 
-Presiona `Ctrl+C` para terminar.
+ Presiona Ctrl+C para terminar.
 
 ### Modo Organize
 
-Consolida logs de sesión, agrupa por mes y comprime:
+Consolida logs de sesión en el log maestro (JSONL):
 
 ```bash
 ./gobat -mode=organize
@@ -87,8 +90,8 @@ Consolida logs de sesión, agrupa por mes y comprime:
 **Output**:
 ```
 Procesados 5 archivos nuevos, 0 omitidos, 0 errores.
-Comprimido: 2025-10.txt -> 2025-10.txt.gz
 ```
+**Log maestro**: `logs/master/master_YYYY-MM.jsonl` (un archivo por mes)
 
 ## 🛠️ Cambios Comunes
 
@@ -123,7 +126,7 @@ go test ./...
 | Problema | Solución |
 |----------|----------|
 | "no se encontró batería" | `upower -e` y instala upower |
-| "ya hay una instancia corriendo" | `rm logs/.organizar.lock` |
+| "ya hay una instancia corriendo" | `rm logs/.organizar.lock` (Nota: los lock files ahora están en la raíz de `logs/`) |
 | El binario no se crea | `go clean && go build -o gobat ./cmd/gobat` |
 | Tests fallan | Primero compila, luego testa |
 
@@ -133,11 +136,12 @@ Ver más en [QUICK_REFERENCE.md](QUICK_REFERENCE.md#-troubleshooting-rápido).
 
 | Módulo | Responsabilidad | Líneas |
 |--------|-----------------|--------|
-| `config/` | Configuración centralizada | 40 |
-| `monitor/` | Loop de monitoreo | 140 |
-| `organizer/` | Organización y compresión | 200 |
-| `system/` | Datos del sistema | 350 |
-| `utils/` | Utilidades compartidas | 60 |
+| `config/` | Configuración centralizada | 50 |
+| `monitor/` | Loop de monitoreo | 250 |
+| `organizer/` | Organización y consolidación | 320 |
+| `rotator/` | Rotación y compresión de logs | 180 |
+| `system/` | Datos del sistema | 450 |
+| `utils/` | Utilidades compartidas | 110 |
 
 ## ✅ Refactorización Completada
 

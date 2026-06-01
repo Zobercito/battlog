@@ -34,27 +34,24 @@ ps aux | grep gobat
 # Ver estructura
 tree -L 2 -I 'logs_*|archivos_*' .
 
-# Ver logs diarios
-ls -lh logs/logs/ | tail -10
-cat logs/logs/log_*.txt | head -50
+# Ver logs de sesión activos
+ls -lh logs/current/ | tail -10
+cat logs/current/log_*.json | jq . | head -50
 
-# Ver logs mensuales
-ls -lh logs/logs_historial/
-
-# Ver log maestro consolidado
-tail -100 logs/logs_todo.txt
+# Ver log maestro del mes actual (JSONL)
+tail -100 logs/master/master_*.jsonl
 
 # Ver qué ya fue procesado
 cat logs/archivos_procesados.txt
 
 # Contar entradas de log
-wc -l logs/logs_todo.txt
+wc -l logs/master/master_*.jsonl
 
 # Buscar en logs (por ejemplo, "charging")
 grep -r "charging" logs/
 
 # Ver últimas 50 líneas en tiempo real
-tail -f logs/logs_todo.txt
+tail -f logs/master/master_*.jsonl
 ```
 
 ---
@@ -70,9 +67,9 @@ tail -f logs/logs_todo.txt
 IntervaloSegundos: 10,
 
 // Cambios recomendados:
-IntervaloSegundos: 10,   # Rápido (16,000 entradas/día)
-IntervaloSegundos: 30,   # Equilibrado (2,880 entradas/día)  
-IntervaloSegundos: 60,   # Ahorro (1,440 entradas/día)
+IntervaloSegundos: 10,   // Rápido
+IntervaloSegundos: 30,   // Equilibrado
+IntervaloSegundos: 60,   // Ahorro
 ```
 
 Luego:
@@ -81,17 +78,23 @@ go build -o gobat ./cmd/gobat
 ./gobat -mode=log
 ```
 
-### Cambiar meses sin comprimir
+### Cambiar días antes de comprimir
 
 **Archivo**: `internal/config/config.go`
 
 ```go
-MesesSinComprimir: 2,    # Comprime después de 2 meses
+DiasEnVivo: 7,    # Comprime logs de sesión después de 7 días
 
 # Cambios comunes:
-MesesSinComprimir: 1,    # Comprime muy rápido
-MesesSinComprimir: 3,    # Mantiene más meses sin comprimir
-MesesSinComprimir: 6,    # Comprime solo lo muy viejo
+DiasEnVivo: 1,    # Comprime muy rápido
+DiasEnVivo: 14,   # Mantiene 2 semanas sin comprimir
+DiasEnVivo: 30,   # Mantiene 1 mes sin comprimir
+```
+
+### Desactivar compresión automática
+
+```go
+ComprimirAlRotar: false,   # Mueve a archive/ sin comprimir
 ```
 
 ---
@@ -106,7 +109,7 @@ go test ./... -v
 go test ./... -cover
 
 # Test específico
-go test ./internal/organizer -run TestAppendToFileCreatesAndAppends
+go test ./internal/organizer -run TestGzipFileCreatesValidArchive
 
 # Verbose output
 go test -v ./... 2>&1 | head -50
@@ -196,20 +199,17 @@ kill $gobat_pid
 
 ```bash
 # Ver resumen diario
-cat logs/logs_todo.txt | grep "^---" | head -20
+tail -100 logs/master/master_*.jsonl | jq '.timestamp'
 
-# Ver solo estado de batería
-cat logs/logs_todo.txt | grep -A5 "Battery Status:"
+# Ver solo porcentaje de batería
+cat logs/master/master_*.jsonl | jq '.battery.percentage'
 
 # Promedio de consumo
-cat logs/logs_todo.txt | grep "energy-rate" | \
-    sed 's/.*: //' | sed 's/ W//' | \
+cat logs/master/master_*.jsonl | jq '.battery.power_w' | \
     awk '{sum+=$1; count++} END {print "Promedio: " sum/count " W"}'
 
 # Batería mínima del día
-cat logs/logs_todo.txt | grep "percentage" | \
-    sed 's/.*: //' | sed 's/%//' | \
-    sort -n | head -1
+cat logs/master/master_*.jsonl | jq '.battery.percentage' | sort -n | head -1
 ```
 
 ---
@@ -221,17 +221,16 @@ cat logs/logs_todo.txt | grep "percentage" | \
 ps aux | grep gobat
 
 # ¿Cuántas líneas tiene el log maestro?
-wc -l logs/logs_todo.txt
+wc -l logs/master/master_*.jsonl
 
 # ¿Últimas 5 entradas?
-tail -100 logs/logs_todo.txt | head -50
+tail -5 logs/master/master_*.jsonl | jq .
 
-# ¿Tamaño de directorios?
+# Ver tamaño de directorios?
 du -sh logs/logs/
-du -sh logs/logs_historial/
 
 # ¿Archivos comprimidos?
-ls -lh logs/logs_historial/*.gz
+ls -lh logs/archive/*/
 
 # ¿Lock file activo?
 ls -la logs/.organizar.lock
@@ -257,7 +256,8 @@ du -sh logs/
 # Proyección a 1 año (sin comprimir)
 # 20 MB/día × 365 días = 7.3 GB
 
-# Con compresión cada 2 meses: 3-4x reducción
+# Con compresión automática de logs > 7 días: ~4-5x de ahorro
+# → ~1.5-2 GB/año en archive/ con compresión gzip
 ```
 
 ---
@@ -297,7 +297,8 @@ out["my_data"] = getMyData()
 
 3. Muéstrala en `internal/monitor/monitor.go`:
 ```go
-b.WriteString(fmt.Sprintf("  %-24s : %s\n", "my_data", getOrDefault(sys, "my_data")))
+// En buildLogEntryJSON(), usar el campo del struct
+entry.NewField = value
 ```
 
 ---
@@ -323,11 +324,8 @@ cp -r logs logs.backup_$(date +%Y%m%d)
 # Restaurar
 cp -r logs.backup_20260509 logs
 
-# Limpiar logs antiguos (cuidado!)
-rm logs/logs_historial/*.gz   # Solo comprimidos
-
 # Limpiar todo (PELIGRO)
-rm -rf logs/*
+rm -rf logs/current/* logs/master/* logs/archive/* logs/archivos_procesados.txt
 ```
 
 ---
@@ -338,7 +336,8 @@ rm -rf logs/*
 # Podrían agregarse en el futuro:
 GOBAT_LOG_DIR=/custom/path
 GOBAT_INTERVAL=30
-GOBAT_COMPRESS_MONTHS=3
+GOBAT_DIAS_EN_VIVO=14
+GOBAT_COMPRIMIR_AL_ROTAR=true
 
 # Uso:
 export GOBAT_INTERVAL=30
@@ -356,7 +355,7 @@ export GOBAT_INTERVAL=30
 ./gobat -mode=log &
 while true; do
     sleep 3600
-    percentage=$(tail -20 logs/logs_todo.txt | grep percentage | tail -1 | cut -d: -f2)
+    percentage=$(tail -1 logs/master/master_*.jsonl | jq '.battery.percentage')
     if [[ $(echo "$percentage < 20" | bc) == 1 ]]; then
         notify-send "Batería baja: $percentage"
     fi
@@ -369,10 +368,10 @@ done
 #!/bin/bash
 echo "=== RESUMEN DE BATERÍA DEL DÍA ==="
 echo "Porcentaje mínimo:"
-cat logs/logs_todo.txt | grep percentage | sed 's/.*: //' | sort -n | head -1
+cat logs/master/master_*.jsonl | jq '.battery.percentage' | sort -n | head -1
 echo ""
 echo "Consumo promedio:"
-cat logs/logs_todo.txt | grep energy-rate | sed 's/.*: //' | sed 's/ W//' | \
+cat logs/master/master_*.jsonl | jq '.battery.power_w' | \
     awk '{sum+=$1; count++} END {print sum/count " W"}'
 ```
 
@@ -380,9 +379,7 @@ cat logs/logs_todo.txt | grep energy-rate | sed 's/.*: //' | sed 's/ W//' | \
 
 ```bash
 #!/bin/bash
-echo "timestamp,percentage,temp,frequency" > battery.csv
-cat logs/logs_todo.txt | grep -A10 "^---" | grep -E "(^---|percentage|cpu_temp|current_frequency)" | \
-    paste -d, - - - - >> battery.csv
+cat logs/master/master_*.jsonl | jq -r '[.timestamp, .battery.percentage, .cpu.temp_c, .cpu.freq_ghz] | @csv' >> battery.csv
 ```
 
 ---

@@ -15,26 +15,31 @@ GoBat está diseñado con una **arquitectura modular y limpia** siguiendo princi
 │   (Orquestación de modos)           │
 └──────────────┬──────────────────────┘
                │
-        ┌──────┴──────┐
-        ▼              ▼
-    ┌────────────┐  ┌────────────┐
-    │  MONITOR   │  │ ORGANIZER  │
-    │  monitor/  │  │organizer/  │
-    └────┬───────┘  └────┬───────┘
-         │                │
-         └────────┬───────┘
-                  ▼
-        ┌────────────────────┐
-        │   SYSTEM (datos)   │  ← Recopila datos
-        │    system/         │
-        └────────┬───────────┘
-                 │
-        ┌────────┴──────────┐
-        ▼                   ▼
-    ┌────────────┐    ┌──────────────┐
-    │  UTILS     │    │   CONFIG     │
-    │ utils/     │    │  config/     │
-    └────────────┘    └──────────────┘
+         ┌──────┴──────┐
+         ▼              ▼
+     ┌────────────┐  ┌──────────────┐
+     │  MONITOR   │  │ ORGANIZER    │
+     │  monitor/  │  │ organizer/   │
+     └────┬───────┘  └──────┬───────┘
+          │                 │
+          └────────┬────────┘
+                   ▼
+             ┌──────────┐
+             │ ROTATOR  │  ← Rotación y compresión
+             │ rotator/ │
+             └────┬─────┘
+                  │
+         ┌────────┴──────────┐
+         ▼                   ▼
+     ┌────────────┐    ┌──────────────┐
+     │   SYSTEM   │    │    CONFIG    │
+     │  system/   │    │   config/    │
+     └──────┬─────┘    └──────────────┘
+            ▼
+     ┌────────────┐
+     │   UTILS    │
+     │  utils/    │
+     └────────────┘
 ```
 ## Flujos Principales
 
@@ -44,14 +49,15 @@ GoBat está diseñado con una **arquitectura modular y limpia** siguiendo princi
 main()
   ├─> config.Load()
   ├─> monitor.Run(cfg)
-  │    ├─> system.DetectBattery()  # Encuentra ruta de batería
-  │    ├─> Crea archivo de log
+  │    ├─> system.DetectBattery()
+  │    ├─> rotator.RotateLogs()      # Rotar logs viejos
+  │    ├─> Crea archivo de log en current/
   │    ├─> Loop cada N segundos:
   │    │    ├─> system.GetBatteryInfo()
   │    │    ├─> system.GetSystemInfo()
-  │    │    ├─> Construye entrada de log
-  │    │    └─> Escribe a archivo
-  │    └─> (Espera Ctrl+C)
+  │    │    ├─> Construye LogEntry JSON (vía helpers)
+  │    │    └─> Escribe a archivo + fsync
+  │    └─> (Espera Ctrl+C → Sync + cierra JSON)
   └─> Fin
 ```
 
@@ -61,14 +67,14 @@ main()
 main()
   ├─> config.Load()
   ├─> organizer.Run(cfg)
-  │    ├─> organizer.acquireLock()  # Evita concurrencia
+  │    ├─> rotator.RotateLogs()     # Rotar logs viejos primero
+  │    ├─> acquireLock()
   │    ├─> Lee control de procesados
-  │    ├─> Para cada log sin procesar:
-  │    │    ├─> Lee contenido
-  │    │    ├─> Escribe en historial mensual
-  │    │    ├─> Escribe en maestro
+  │    ├─> Abre master_YYYY-MM.jsonl (por mes actual)
+  │    ├─> Para cada log sin procesar en current/:
+  │    │    ├─> Parsea JSON de sesión (tolerante a EOF)
+  │    │    ├─> Escribe records en maestro (JSONL)
   │    │    └─> Marca como procesado
-  │    ├─> organizer.compressOldLogs()  # Comprime meses antiguos
   │    └─> Libera lock
   └─> Fin
 ```
@@ -90,10 +96,15 @@ fmt.Println(cfg.LogDir)  // "/path/to/logs/logs"
 ```
 
 **Campos importantes**:
-- `LogDir`: Directorio de logs de sesión
-- `HistorialDir`: Directorio de logs mensuales
-- `MasterLog`: Log consolidado
+- `LogDir`: Directorio de logs de sesión (JSON por sesión) → `logs/current/`
+- `MasterDir`: Directorio de logs maestro por mes → `logs/master/`
+- `ArchiveDir`: Directorio de logs históricos comprimidos → `logs/archive/`
+- `ControlFile`: Archivos ya procesados
 - `IntervaloSegundos`: Frecuencia de muestreo
+- `DiasEnVivo`: Días antes de comprimir logs de sesión (default: 7)
+- `ComprimirAlRotar`: Comprimir logs al mover a archive (default: true)
+- `RotarMaestroPorMes`: Rotar log maestro por mes (default: true)
+- `RetencionDias`: Días de retención (0 = infinito)
 
 ---
 
@@ -134,46 +145,76 @@ mem := sys["used"]                    // "4.2 GB / 8 GB (53%)"
 
 ### 📊 `internal/monitor` - Monitor de Batería
 
-**Responsabilidad**: Loop continuo de monitoreo y registro
+**Responsabilidad**: Loop continuo de monitoreo y registro en formato JSON
 
 **Exports**:
 - `Run(cfg)` - Punto de entrada del modo monitor
 
 **Internals**:
-- `buildLogEntry()` - Construye una entrada formateada del log
-- `getOrDefault()` - Helper para valores con fallback
+- `buildLogEntryJSON()` - Construye LogEntry como JSON
+- `parseFrequency()`, `parseMemory()`, `parseProcess()`, etc.
 
 **Flujo**:
 1. Detecta batería
-2. Crea archivo de log con timestamp
-3. Escribe encabezados
-4. Loop infinito cada N segundos:
-   - Recopila datos con `system.Get*()`
-   - Formatea como texto
-   - Escribe a archivo
-   - `fsync()` para garantizar persistencia
-5. Captura Ctrl+C y escribe pie de archivo
+2. Crea archivo JSON con cabecera
+3. Loop infinito cada N segundos:
+   - Recopila datos con system.Get*()
+   - Serializa como JSON
+   - Escribe a archivo + fsync()
+4. Captura Ctrl+C y cierra el JSON
 
 ---
 
 ### 📁 `internal/organizer` - Organizador de Logs
 
-**Responsabilidad**: Consolidar y comprimir logs
+**Responsabilidad**: Consolidar logs en formato JSONL (un objeto JSON por línea)
 
 **Exports**:
 - `Run(cfg)` - Punto de entrada del modo organizador
 
 **Internals**:
-- `compressOldLogs()` - Comprime archivos de más de N meses
 - `gzipFile()` - Comprime un archivo atomáticamente
+- `parseSessionJSON()` - Parsea sesión JSON (tolerante a EOF)
 - `acquireLock()` - Obtiene lock exclusivo
 - `isProcessAlive()` - Verifica si un PID está vivo
+- `parseJSONLines()` - Extrae objetos JSON línea por línea
+- `scanLine()` - Escanea líneas del archivo
 
 **Features importantes**:
-- **Atomicidad**: Usa archivo `.tmp` durante compresión
+- **Formato JSONL**: Cada record es una línea JSON independiente. Sin kill -9 ni JSON inválido.
+- **Atomicidad**: Usa rollback con Truncate si falla escritura
 - **Idempotencia**: Verifica qué ya fue procesado
 - **Concurrencia**: Lock file previene ejecuciones paralelas
 - **Recuperación**: Detecta y limpia locks huérfanos
+- **Tolerancia**: Parsea records completos ignorando el tail incompleto de sesiones matadas
+
+---
+
+### 🔄 `internal/rotator` - Rotación y Compresión
+
+**Responsabilidad**: Rotar logs de sesión viejos a archive/ comprimido y rotar logs maestro por mes.
+
+**Exports**:
+- `RotateLogs(cfg)` - Punto de entrada, ejecutado al inicio de monitor y organizer
+- `CurrentMasterPath(cfg)` - Ruta al archivo maestro del mes actual
+- `SessionLogPathsSorted(cfg)` - Lista de archivos de sesión ordenados
+
+**Flujo**:
+1. Crea directorios current/, master/, archive/ si no existen
+2. Mueve logs de sesión más viejos que `DiasEnVivo` a `archive/YYYY-MM/`
+3. Si `ComprimirAlRotar` está activo, comprime con gzip
+4. Si `RotarMaestroPorMes` está activo, mueve masters de meses anteriores a archive/
+5. Si `RetencionDias > 0`, elimina archivos más viejos que el límite
+
+**Estructura de directorios resultante**:
+```
+logs/
+├── current/       # Logs de sesión activos (< DiasEnVivo días)
+├── master/        # Log maestro por mes (master_YYYY-MM.jsonl)
+└── archive/       # Logs históricos comprimidos
+    ├── 2026-04/
+    └── 2026-05/
+```
 
 ---
 
@@ -185,7 +226,6 @@ mem := sys["used"]                    // "4.2 GB / 8 GB (53%)"
 - `ReadIntFile(path)` - Lee entero de archivo
 - `ReadIntFileToFloat(path, divisor)` - Lee y convierte a float
 - `ParseSwapUsed(data)` - Parsea /proc/meminfo
-- `AppendToFile(path, line)` - Añade línea a archivo
 
 **Uso**:
 ```go
@@ -202,13 +242,16 @@ cmd/gobat/main.go
   ├─> internal/config
   ├─> internal/monitor
   │    ├─> internal/config
+  │    ├─> internal/rotator
+  │    │    ├─> internal/config
+  │    │    └─> internal/utils
   │    └─> internal/system
-  │         ├─> internal/utils
-  │         └─> os/exec (comandos del sistema)
+  │         └─> internal/utils
   └─> internal/organizer
        ├─> internal/config
-       ├─> internal/utils
-       └─> compress/gzip
+       └─> internal/rotator
+            ├─> internal/config
+            └─> internal/utils
 ```
 
 **Regla de oro**: Los módulos inferiores NO importan superiores (no hay dependencias circulares).
@@ -234,9 +277,8 @@ func getNewMetric() string {
 
 **Luego en monitor**:
 ```go
-// En buildLogEntry(), agregar sección
-b.WriteString("\nNew Section:\n")
-b.WriteString(fmt.Sprintf("  %-24s : %s\n", "metric", getOrDefault(sys, "new_metric")))
+// En buildLogEntryJSON(), usar el campo del struct
+entry.NewField = value
 ```
 
 ---
@@ -251,15 +293,9 @@ IntervaloSegundos: 30,  // Cambiar aquí
 
 ---
 
-### 3. Cambiar período de compresión
+### 3. Cambiar formato de logs
 
-**Ubicación**: `internal/config/config.go`
-
-```go
-MesesSinComprimir: 3,  // Comprimir meses con más de 3 meses de antigüedad
-```
-
----
+Los logs de sesión usan el struct `LogEntry` en `internal/monitor/monitor.go`. Los logs maestro usan JSONL en `internal/organizer/organizer.go`.
 
 ### 4. Agregar nuevo modo
 
@@ -337,8 +373,7 @@ go test ./...
 | "no se encontró batería" | `upower` no devuelve salida | Instalar `upower` |
 | "ya hay una instancia corriendo" | Lock file obsoleto | Borrar `.organizar.lock` |
 | Tests fallan | Falta compilar | `go build ./cmd/gobat` primero |
-| Permisos denegados | Acceso a `/sys` sin permisos | Normal, devuelve "placeholder" |
-| Archivos sin comprimir | Archivo es "reciente" | Cambiar `MesesSinComprimir` |
+| Permisos denegados | Acceso a `/sys` sin permisos | Normal, devuelve "unknown" |
 
 ---
 
