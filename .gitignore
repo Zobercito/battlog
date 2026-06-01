@@ -11,6 +11,7 @@ logs/current/
 logs/master/
 logs/archive/
 logs/logs_todo.json
+logs/archivos_procesados.txt
 
 # IDE
 .vscode/
