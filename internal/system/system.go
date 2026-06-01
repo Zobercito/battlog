@@ -28,6 +28,7 @@ var BatteryFields = []string{
 	"energy-rate",
 	"energy",
 	"voltage",
+	"temperature",
 	"energy-full",
 	"energy-full-design",
 	"charge-cycles",
@@ -259,29 +260,32 @@ func getDisplayBrightness() string {
 }
 
 func getWiFiStatus() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "nmcli", "radio", "wifi").Output()
-	if err != nil {
-		return "unknown"
-	}
-
-	if strings.TrimSpace(string(out)) != "enabled" {
-		return "off"
-	}
-
-	out2, err2 := exec.CommandContext(ctx, "nmcli", "-t", "connection", "show", "--active").Output()
-	if err2 != nil {
-		return "on (disconnected)"
-	}
-
-	for _, line := range strings.Split(string(out2), "\n") {
-		fields := strings.Split(line, ":")
-		if len(fields) >= 3 && strings.Contains(fields[2], "802-11") {
-			return "on (connected)"
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "nmcli", "radio", "wifi").Output()
+		if err != nil {
+			return "unknown"
+		}
+		if strings.TrimSpace(string(out)) != "enabled" {
+			return "off"
 		}
 	}
-	return "on (disconnected)"
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "nmcli", "-t", "connection", "show", "--active").Output()
+		if err != nil {
+			return "on (disconnected)"
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			fields := strings.Split(line, ":")
+			if len(fields) >= 3 && strings.Contains(fields[2], "802-11") {
+				return "on (connected)"
+			}
+		}
+		return "on (disconnected)"
+	}
 }
 
 func getBluetoothStatus() string {
@@ -369,6 +373,18 @@ func enrichBatteryInfo(m BatteryInfo) {
 		m["wear_level"] = fmt.Sprintf("%.1f%%", wearLevel)
 	} else {
 		m["wear_level"] = "unknown"
+	}
+
+	cyclesStr := m["charge-cycles"]
+	if cyclesStr != "" {
+		if cycles, err := strconv.Atoi(strings.TrimSpace(cyclesStr)); err == nil && cycles > 0 {
+			const maxCycles = 1000
+			if cycles < maxCycles {
+				m["cycles_remaining"] = fmt.Sprintf("%d", maxCycles-cycles)
+			} else {
+				m["cycles_remaining"] = "0"
+			}
+		}
 	}
 }
 
