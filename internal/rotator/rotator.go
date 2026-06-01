@@ -7,13 +7,16 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"gobat/internal/config"
 	"gobat/internal/utils"
 )
 
-var logRe = regexp.MustCompile(`^log_(\d{4})-(\d{2})-\d{2}_\d{2}-\d{2}-\d{2}\.json$`)
+var logRe = regexp.MustCompile(`^log_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.json$`)
+
+var monthRe = regexp.MustCompile(`^master_(\d{4}-\d{2})\.jsonl$`)
 
 // RotateLogs rota y comprime logs según la configuración.
 // Se ejecuta al inicio del monitor y del organizador.
@@ -39,55 +42,48 @@ func rotateSessionLogs(cfg config.Config) {
 		return
 	}
 
-	now := time.Now()
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		matches := logRe.FindStringSubmatch(entry.Name())
-		if len(matches) < 3 {
+		if len(matches) < 7 {
 			continue
 		}
 
 		fileYear, fileMonth := matches[1], matches[2]
-		// El nombre tiene formato log_YYYY-MM-DD_HH-MM-SS.json → extraer fecha desde la posición 4
-		if len(entry.Name()) < 24 {
-			continue
-		}
-		timeStr := entry.Name()[4 : 4+19] // "YYYY-MM-DD_HH-MM-SS"
+		timeStr := fmt.Sprintf("%s-%s-%s_%s-%s-%s", matches[1], matches[2], matches[3], matches[4], matches[5], matches[6])
 		fileTime, err := time.Parse("2006-01-02_15-04-05", timeStr)
-		if err != nil {
+		if err != nil || time.Since(fileTime) <= time.Duration(cfg.DiasEnVivo)*24*time.Hour {
 			continue
 		}
 
-		if now.Sub(fileTime) > time.Duration(cfg.DiasEnVivo)*24*time.Hour {
-			archDir := filepath.Join(cfg.ArchiveDir, fmt.Sprintf("%s-%s", fileYear, fileMonth))
-			if err := os.MkdirAll(archDir, 0755); err != nil {
-				log.Printf("Aviso: no se pudo crear %s: %v", archDir, err)
-				continue
-			}
-
-			srcPath := filepath.Join(cfg.LogDir, entry.Name())
-			dstPath := filepath.Join(archDir, entry.Name())
-
-			if err := os.Rename(srcPath, dstPath); err != nil {
-				log.Printf("Aviso: no se pudo mover %s a archive: %v", entry.Name(), err)
-				continue
-			}
-
-			if cfg.ComprimirAlRotar {
-				gzPath := dstPath + ".gz"
-				if err := utils.GzipFile(dstPath, gzPath); err != nil {
-					log.Printf("Aviso: no se pudo comprimir %s: %v", entry.Name(), err)
-					continue
-				}
-				if err := os.Remove(dstPath); err != nil {
-					log.Printf("Aviso: no se pudo eliminar %s tras comprimir: %v", entry.Name(), err)
-				}
-			}
-
-			log.Printf("Rotado: %s → archive", entry.Name())
+		archDir := filepath.Join(cfg.ArchiveDir, fmt.Sprintf("%s-%s", fileYear, fileMonth))
+		if err := os.MkdirAll(archDir, 0755); err != nil {
+			log.Printf("Aviso: no se pudo crear %s: %v", archDir, err)
+			continue
 		}
+
+		srcPath := filepath.Join(cfg.LogDir, entry.Name())
+		dstPath := filepath.Join(archDir, entry.Name())
+
+		if err := os.Rename(srcPath, dstPath); err != nil {
+			log.Printf("Aviso: no se pudo mover %s a archive: %v", entry.Name(), err)
+			continue
+		}
+
+		if cfg.ComprimirAlRotar {
+			gzPath := dstPath + ".gz"
+			if err := utils.GzipFile(dstPath, gzPath); err != nil {
+				log.Printf("Aviso: no se pudo comprimir %s: %v", entry.Name(), err)
+				continue
+			}
+			if err := os.Remove(dstPath); err != nil {
+				log.Printf("Aviso: no se pudo eliminar %s tras comprimir: %v", entry.Name(), err)
+			}
+		}
+
+		log.Printf("Rotado: %s → archive", entry.Name())
 	}
 }
 
@@ -114,12 +110,12 @@ func rotateMasterLog(cfg config.Config) {
 		if entry.Name() == filepath.Base(currentMaster) {
 			continue
 		}
-		if !stringsHasSuffix(entry.Name(), ".jsonl") {
+		if !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
 
 		// Mover master de mes anterior a archive
-		monthMatch := regexp.MustCompile(`^master_(\d{4}-\d{2})\.jsonl$`).FindStringSubmatch(entry.Name())
+		monthMatch := monthRe.FindStringSubmatch(entry.Name())
 		if monthMatch == nil {
 			continue
 		}
@@ -196,9 +192,4 @@ func SessionLogPathsSorted(cfg config.Config) ([]string, error) {
 	}
 	sort.Strings(paths)
 	return paths, nil
-}
-
-// stringsHasSuffix es un wrapper porque estamos en Go 1.22
-func stringsHasSuffix(s, suffix string) bool {
-	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
 }

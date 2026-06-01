@@ -3,6 +3,7 @@ package rotator
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,16 +93,16 @@ func TestRotateLogsMovesOldSession(t *testing.T) {
 	}
 }
 
-func TestStringsHasSuffix(t *testing.T) {
+func TestStringsHasSuffixIsCorrect(t *testing.T) {
 	t.Parallel()
 
-	if !stringsHasSuffix("master_2026-05.jsonl", ".jsonl") {
+	if !strings.HasSuffix("master_2026-05.jsonl", ".jsonl") {
 		t.Fatal("expected true")
 	}
-	if stringsHasSuffix("master_2026-05.jsonl", ".gz") {
+	if strings.HasSuffix("master_2026-05.jsonl", ".gz") {
 		t.Fatal("expected false")
 	}
-	if stringsHasSuffix("", ".jsonl") {
+	if strings.HasSuffix("", ".jsonl") {
 		t.Fatal("expected false for empty string")
 	}
 }
