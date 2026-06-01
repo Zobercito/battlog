@@ -2,10 +2,10 @@ package organizer
 
 import (
 	"bufio"
-	"compress/gzip"
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,13 +15,13 @@ import (
 	"syscall"
 
 	"gobat/internal/config"
+	"gobat/internal/rotator"
 )
 
-// Run inicia el organizador de logs
 func Run(cfg config.Config) {
-	if err := os.MkdirAll(cfg.LogsRoot, 0755); err != nil {
-		log.Printf("ERROR creando directorio base: %v", err)
-		return
+	// Rotar logs viejos antes de procesar
+	if err := rotator.RotateLogs(cfg); err != nil {
+		log.Printf("ERROR en rotación de logs: %v", err)
 	}
 
 	releaseLock, err := acquireLock(cfg.LockFile)
@@ -31,7 +31,6 @@ func Run(cfg config.Config) {
 	}
 	defer releaseLock()
 
-	// Cargar archivos ya procesados usando streaming para O(1) memoria
 	procesados := make(map[string]bool)
 	if f, err := os.Open(cfg.ControlFile); err == nil {
 		scanner := bufio.NewScanner(f)
@@ -41,47 +40,39 @@ func Run(cfg config.Config) {
 				procesados[line] = true
 			}
 		}
-		
-		// Verificar error de lectura del control
 		if err := scanner.Err(); err != nil {
 			log.Printf("ERROR CRÍTICO: I/O falló al leer %s: %v", cfg.ControlFile, err)
 			f.Close()
-			return // Abortar para evitar duplicación masiva
+			return
 		}
 		f.Close()
 	}
 
-	// Los logs de sesión se mantienen indefinidamente para máximo histórico.
-	// Solo se consolidan en archivos mensuales y se comprimen los antiguos.
-	// Listar archivos de log para procesar
-	files, err := os.ReadDir(cfg.LogDir)
+	sessionPaths, err := rotator.SessionLogPathsSorted(cfg)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			fmt.Println("No hay logs de sesión todavía.")
-			return
-		}
 		log.Printf("ERROR leyendo directorio de logs: %v", err)
 		return
 	}
 
-	re := regexp.MustCompile(`^log_(\d{4})-(\d{2})-\d{2}_\d{2}-\d{2}-\d{2}\.txt$`)
+	if len(sessionPaths) == 0 {
+		fmt.Println("No hay logs de sesión nuevos.")
+		return
+	}
+
+	re := regexp.MustCompile(`^log_(\d{4})-(\d{2})-\d{2}_\d{2}-\d{2}-\d{2}\.json$`)
 
 	nuevosProcesados := 0
 	omitidos := 0
 	erroresProcesamiento := 0
 
-	masterF, err := os.OpenFile(cfg.MasterLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	masterPath := rotator.CurrentMasterPath(cfg)
+	masterF, err := os.OpenFile(masterPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("ERROR abriendo log maestro: %v", err)
 		return
 	}
-	defer func() {
-		if err := masterF.Close(); err != nil {
-			log.Printf("Aviso: error cerrando log maestro: %v", err)
-		}
-	}()
+	defer masterF.Close()
 
-	// Abrir archivo de control antes del loop para evitar I/O repetido
 	controlF, err := os.OpenFile(cfg.ControlFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Printf("ERROR abriendo archivo de control: %v", err)
@@ -89,19 +80,15 @@ func Run(cfg config.Config) {
 	}
 	defer controlF.Close()
 
-	// Procesar cada archivo
-	for _, file := range files {
-		if file.IsDir() || procesados[file.Name()] {
-			if !file.IsDir() {
-				omitidos++
-			}
+	for _, sessionPath := range sessionPaths {
+		fileName := filepath.Base(sessionPath)
+		if procesados[fileName] {
+			omitidos++
 			continue
 		}
 
-		// Comprobar si el monitor tiene el archivo bloqueado
-		testLockF, err := os.OpenFile(filepath.Join(cfg.LogDir, file.Name()), os.O_RDONLY, 0)
+		testLockF, err := os.OpenFile(sessionPath, os.O_RDONLY, 0)
 		if err == nil {
-			// Intentamos obtener un lock compartido. Si falla (EWOULDBLOCK), el monitor lo tiene.
 			errLock := syscall.Flock(int(testLockF.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
 			if errLock != nil {
 				testLockF.Close()
@@ -112,78 +99,49 @@ func Run(cfg config.Config) {
 			testLockF.Close()
 		}
 
-		matches := re.FindStringSubmatch(file.Name())
+		matches := re.FindStringSubmatch(fileName)
 		if len(matches) < 3 {
 			omitidos++
 			continue
 		}
-		_ = matches // año y mes no se usan actualmente
 
-		// Reemplaza la carga masiva en memoria por un streaming línea por línea
-		inFile, err := os.Open(filepath.Join(cfg.LogDir, file.Name()))
-		if err != nil {
-			log.Printf("Aviso: no se pudo abrir log %s: %v", file.Name(), err)
+		records, parseErr := parseSessionJSON(sessionPath)
+		if parseErr != nil {
+			log.Printf("Aviso: no se pudo parsear %s: %v", fileName, parseErr)
+			erroresProcesamiento++
+			continue
+		}
+		if len(records) == 0 {
+			log.Printf("Aviso: sin registros válidos en %s", fileName)
 			erroresProcesamiento++
 			continue
 		}
 
-		// Capturar tamaño original del master para rollback en caso de fallo
 		statMaster, err := masterF.Stat()
 		if err != nil {
 			log.Printf("Aviso: no se pudo obtener stat del log maestro: %v", err)
-			inFile.Close()
 			erroresProcesamiento++
 			continue
 		}
 		masterOrigSize := statMaster.Size()
 
-		// Procesar y escribir al vuelo
-		scanner := bufio.NewScanner(inFile)
-		buf := make([]byte, 0, 64*1024)
-		scanner.Buffer(buf, 1024*1024) // Capacidad hasta 1MB por línea
 		var writeErr error
-		for scanner.Scan() {
-			cleanLine := strings.Map(func(r rune) rune {
-				if r == 0 || r == '\r' {
-					return -1
-				}
-				return r
-			}, scanner.Text())
-
-			if _, err := masterF.WriteString(cleanLine + "\n"); err != nil {
+		for _, record := range records {
+			if _, err := masterF.Write(append(record, '\n')); err != nil {
 				writeErr = err
 				break
 			}
 		}
-		scanErr := scanner.Err()
-		inFile.Close()
-
-		var failed bool
 
 		if writeErr != nil {
-			log.Printf("Aviso: error de escritura procesando %s: %v", file.Name(), writeErr)
-			failed = true
-		} else if scanErr != nil {
-			log.Printf("ERROR de I/O leyendo log %s: %v", file.Name(), scanErr)
-			failed = true
-		} else {
-			// Si no hubo error, escribimos salto de línea final
-			if _, err := masterF.WriteString("\n"); err != nil {
-				failed = true
-			}
-
-			// Si aún no hay error, hacemos el "Commit" en el archivo de control
-			if !failed {
-				if _, err := controlF.WriteString(file.Name() + "\n"); err != nil {
-					log.Printf("Aviso: no se pudo actualizar control de procesados: %v", err)
-					failed = true
-				}
-			}
+			log.Printf("Aviso: error de escritura procesando %s: %v", fileName, writeErr)
+			masterF.Truncate(masterOrigSize)
+			erroresProcesamiento++
+			continue
 		}
 
-		// Rollback: Si cualquier paso falló, revertimos solo el master
-		if failed {
-			log.Printf("Revirtiendo cambios de %s...", file.Name())
+		if _, err := controlF.WriteString(fileName + "\n"); err != nil {
+			log.Printf("Aviso: no se pudo actualizar control de procesados: %v", err)
 			masterF.Truncate(masterOrigSize)
 			erroresProcesamiento++
 			continue
@@ -195,45 +153,87 @@ func Run(cfg config.Config) {
 	fmt.Printf("Procesados %d archivos nuevos, %d omitidos, %d errores.\n", nuevosProcesados, omitidos, erroresProcesamiento)
 }
 
-// gzipFile comprime un archivo con gzip de forma segura
-func gzipFile(src, dst string) error {
-	f, err := os.Open(src)
+func parseSessionJSON(path string) ([][]byte, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	tmpDst := dst + ".tmp"
-	d, err := os.Create(tmpDst)
-	if err != nil {
-		return err
+		return nil, err
 	}
 
-	w := gzip.NewWriter(d)
-	if _, err := io.Copy(w, f); err != nil {
-		w.Close()
-		d.Close()
-		os.Remove(tmpDst)
-		return err
+	var wrapper struct {
+		Records []json.RawMessage `json:"records"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err == nil {
+		result := make([][]byte, 0, len(wrapper.Records))
+		for _, r := range wrapper.Records {
+			if len(r) > 0 {
+				result = append(result, []byte(r))
+			}
+		}
+		return result, nil
 	}
 
-	if err := w.Close(); err != nil {
-		d.Close()
-		os.Remove(tmpDst)
-		return err
+	records := parseJSONLines(data)
+	if len(records) > 0 {
+		return records, nil
 	}
 
-	if err := d.Close(); err != nil {
-		os.Remove(tmpDst)
-		return err
-	}
+	return nil, fmt.Errorf("sin registros parseables")
+}
 
-	if err := os.Rename(tmpDst, dst); err != nil {
-		os.Remove(tmpDst)
-		return err
+func parseJSONLines(data []byte) [][]byte {
+	var records [][]byte
+	i := 0
+	for i < len(data) {
+		line, n := scanLine(data, i)
+		i = n
+		line = bytes.TrimRight(line, ", \t")
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		if json.Valid(line) {
+			records = append(records, append([]byte{}, line...))
+		} else {
+			parts := splitJSONObjects(line)
+			for _, p := range parts {
+				if json.Valid(p) {
+					records = append(records, append([]byte{}, p...))
+				}
+			}
+		}
 	}
+	return records
+}
 
-	return nil
+func splitJSONObjects(data []byte) [][]byte {
+	var parts [][]byte
+	depth := 0
+	start := 0
+	for i := 0; i < len(data); i++ {
+		if data[i] == '{' {
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		} else if data[i] == '}' {
+			depth--
+			if depth == 0 {
+				parts = append(parts, data[start:i+1])
+			}
+		}
+	}
+	return parts
+}
+
+func scanLine(data []byte, start int) ([]byte, int) {
+	for i := start; i < len(data); i++ {
+		if data[i] == '\n' {
+			return data[start:i], i + 1
+		}
+	}
+	if start < len(data) {
+		return data[start:], len(data)
+	}
+	return nil, len(data)
 }
 
 // acquireLock obtiene un lock exclusivo para el organizador
@@ -291,29 +291,29 @@ func acquireLock(lockPath string) (func(), error) {
 
 // isProcessAlive verifica si un proceso con PID está vivo y es gobat
 func isProcessAlive(pid int) bool {
-	err := syscall.Kill(pid, 0)
+	pidExePath := fmt.Sprintf("/proc/%d/exe", pid)
 
-	// Solo si el proceso no existe liberamos el lock
+	// Leer el symlink primero para detectar PID reciclados antes de verificar señal
+	pidExe, errLink := os.Readlink(pidExePath)
+	if errLink != nil {
+		if errors.Is(errLink, os.ErrNotExist) {
+			return false // Proceso no existe o PID reciclado
+		}
+		// Permisos denegados, asumimos vivo por seguridad
+		return true
+	}
+
+	// Verificar que el binario coincide con el nuestro (PID reciclado = otro binario)
+	myExe, errExe := os.Executable()
+	if errExe == nil && pidExe != myExe {
+		return false
+	}
+
+	// Verificar que el proceso sigue vivo con señal 0
+	err := syscall.Kill(pid, 0)
 	if err != nil && errors.Is(err, syscall.ESRCH) {
 		return false
 	}
 
-	// Resolución absoluta del ejecutable (agnóstico al nombre del binario)
-	myExe, errExe := os.Executable()
-	if errExe == nil {
-		pidExePath := fmt.Sprintf("/proc/%d/exe", pid)
-		pidExe, errLink := os.Readlink(pidExePath)
-
-		// Si leemos el enlace y apunta a otro binario distinto al nuestro, es un PID reciclado
-		if errLink == nil && pidExe != myExe {
-			return false
-		}
-		// Si ocurre os.ErrNotExist, el proceso murió justo ahora
-		if errors.Is(errLink, os.ErrNotExist) {
-			return false
-		}
-	}
-
-	// Permisos denegados u otros errores, asumimos vivo por seguridad
 	return true
 }

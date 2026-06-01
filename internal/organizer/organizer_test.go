@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gobat/internal/utils"
 )
 
 func TestGzipFileCreatesValidArchive(t *testing.T) {
@@ -21,8 +23,8 @@ func TestGzipFileCreatesValidArchive(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if err := gzipFile(src, dst); err != nil {
-		t.Fatalf("gzipFile: %v", err)
+	if err := utils.GzipFile(src, dst); err != nil {
+		t.Fatalf("GzipFile: %v", err)
 	}
 
 	if _, err := os.Stat(dst); err != nil {
