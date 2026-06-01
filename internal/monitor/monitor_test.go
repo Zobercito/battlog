@@ -100,10 +100,10 @@ func TestFillBatteryData(t *testing.T) {
 	t.Parallel()
 
 	bat := map[string]string{
-		"percentage": "85",
-		"state":      "charging",
+		"percentage":  "85",
+		"state":       "charging",
 		"energy-rate": "15.5 W",
-		"voltage":    "12.3 V",
+		"voltage":     "12.3 V",
 	}
 	entry := &LogEntry{}
 	fillBatteryData(bat, nil, entry)
