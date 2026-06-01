@@ -7,12 +7,17 @@ import (
 
 // Config contiene la configuración central de la aplicación
 type Config struct {
-	LogsRoot          string
-	LogDir            string
-	MasterLog         string
-	ControlFile       string
-	LockFile          string
-	IntervaloSegundos int
+	LogsRoot           string
+	LogDir             string
+	MasterDir          string
+	ArchiveDir         string
+	ControlFile        string
+	LockFile           string
+	IntervaloSegundos  int
+	DiasEnVivo         int  // días antes de comprimir logs de sesión
+	ComprimirAlRotar   bool // comprimir logs al mover a archive
+	RotarMaestroPorMes bool // rotar log maestro por mes
+	RetencionDias      int  // 0 = infinito
 }
 
 // Load carga la configuración con valores por defecto
@@ -26,11 +31,16 @@ func Load() Config {
 
 	logsRoot := filepath.Join(baseDir, "logs")
 	return Config{
-		LogsRoot:          logsRoot,
-		LogDir:            filepath.Join(logsRoot, "logs"),
-		MasterLog:         filepath.Join(logsRoot, "logs_todo.txt"),
-		ControlFile:       filepath.Join(logsRoot, "archivos_procesados.txt"),
-		LockFile:          filepath.Join(logsRoot, ".organizar.lock"),
-		IntervaloSegundos: 60,
+		LogsRoot:           logsRoot,
+		LogDir:             filepath.Join(logsRoot, "current"),
+		MasterDir:          filepath.Join(logsRoot, "master"),
+		ArchiveDir:         filepath.Join(logsRoot, "archive"),
+		ControlFile:        filepath.Join(logsRoot, "archivos_procesados.txt"),
+		LockFile:           filepath.Join(logsRoot, ".organizar.lock"),
+		IntervaloSegundos:  60,
+		DiasEnVivo:         7,
+		ComprimirAlRotar:   true,
+		RotarMaestroPorMes: true,
+		RetencionDias:      0,
 	}
 }
