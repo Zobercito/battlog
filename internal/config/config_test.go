@@ -33,6 +33,9 @@ func TestLoadReturnsConfig(t *testing.T) {
 	if cfg.RetencionDias != 0 {
 		t.Fatalf("expected 0, got %d", cfg.RetencionDias)
 	}
+	if cfg.MaxBatteryCycles != 1000 {
+		t.Fatalf("expected 1000, got %d", cfg.MaxBatteryCycles)
+	}
 }
 
 func TestConfigPathsAbsolute(t *testing.T) {
