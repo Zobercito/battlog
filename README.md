@@ -222,4 +222,4 @@ Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) par
 
 ---
 
-**Construido en Go | Última actualización: 1 de junio de 2026**
+**Construido en Go**
