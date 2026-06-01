@@ -1,34 +1,34 @@
 # GoBat - Monitor de Batería para Linux
 
-Sistema modular y profesional en Go para monitorear batería en Linux, consolidar logs mensualmente y comprimir archivos automáticamente.
+Sistema modular y profesional en Go para monitorear batería en Linux, consolidar logs mensualmente y comprimir archivos automaticamente.
 
-## 🚀 Inicio Rápido
+## Inicio Rapido
 
 ```bash
 # Compilar
 go build -o gobat ./cmd/gobat
 
-# Monitor (registra datos cada 10 segundos)
+# Monitor (registra datos periodicamente, default cada 60s)
 ./gobat -mode=log
 
 # Organizador (consolida y comprime logs)
 ./gobat -mode=organize
 ```
 
-## ✨ Características
+## Caracteristicas
 
-- 📊 Monitorea batería continuamente (estado, porcentaje, energía-rate, voltaje, temperatura)
-- 📁 Logs de sesión en formato JSON, log maestro en JSONL (un objeto por línea)
-- 🖥️ Recopila datos del sistema (CPU, GPU, memoria, procesos, conectividad)
-- 🔒 Lock files previenen ejecuciones concurrentes
-- 📝 Modular y profesional (sin dependencias externas)
+- Monitorea bateria continuamente (estado, porcentaje, energia-rate, voltaje, temperatura)
+- Logs de sesion en formato JSON, log maestro en JSONL (un objeto por linea)
+- Recopila datos del sistema (CPU, GPU, memoria, procesos, conectividad)
+- Lock files previenen ejecuciones concurrentes
+- Modular y profesional (sin dependencias externas)
 
-## 📋 Requisitos
+## Requisitos
 
 - Go 1.22+
-- `upower` (para leer datos de batería)
+- `upower` (para leer datos de bateria)
 
-**Instalación de dependencias:**
+**Instalacion de dependencias:**
 ```bash
 # Ubuntu/Debian
 sudo apt install golang upower -y
@@ -37,39 +37,39 @@ sudo apt install golang upower -y
 sudo pacman -S go upower
 ```
 
-## 🏗️ Estructura
+## Estructura
 
 ```
 log_bateria_v3/
 ├── cmd/gobat/
 │   └── main.go              # Punto de entrada
-├── internal/                # Módulos privados
-│   ├── config/              # Configuración
-│   ├── monitor/             # Monitoreo de batería
-│   ├── organizer/           # Organización y compresión
-│   ├── rotator/             # Rotación y compresión de logs
+├── internal/                # Modulos privados
+│   ├── config/              # Configuracion
+│   ├── monitor/             # Monitoreo de bateria
+│   ├── organizer/           # Organizacion (lock + delegacion)
+│   ├── processor/           # Procesamiento de sesiones (core compartido)
+│   ├── rotator/             # Rotacion y compresion de logs
 │   ├── system/              # Datos del sistema
 │   └── utils/               # Utilidades compartidas
 ├── tests/                   # Tests unitarios
 └── logs/                    # Logs (generado)
-    ├── current/             # Logs de sesión activos
+    ├── current/             # Logs de sesion activos
     ├── master/              # Logs maestro (JSONL por mes)
-    └── archive/             # Logs históricos comprimidos
+    └── archive/             # Logs historicos comprimidos
 ```
 
-## 📖 Documentación
+## Documentacion
 
-| Documento | Contenido | Tiempo |
-|-----------|-----------|--------|
-| [QUICK_REFERENCE.md](QUICK_REFERENCE.md) | Comandos y trucos | ⏱️ 2 min |
-| [ARQUITECTURA.md](ARQUITECTURA.md) | Diseño y cómo extender | ⏱️ 20 min |
-| [CAMBIOS.md](CAMBIOS.md) | Estado de la refactorización y pendientes | ⏱️ 15 min |
+| Documento | Contenido |
+|-----------|-----------|
+| [QUICK_REFERENCE.md](QUICK_REFERENCE.md) | Comandos y trucos |
+| [ARQUITECTURA.md](ARQUITECTURA.md) | Diseno y como extender |
 
-## 💻 Uso
+## Uso
 
 ### Modo Monitor
 
-Registra datos de batería cada 10 segundos:
+Registra datos de bateria periodicamente:
 
 ```bash
 ./gobat -mode=log
@@ -77,11 +77,11 @@ Registra datos de batería cada 10 segundos:
 
 **Output**: `logs/current/log_YYYY-MM-DD_HH-MM-SS.json`
 
- Presiona Ctrl+C para terminar.
+Presiona Ctrl+C para terminar.
 
 ### Modo Organize
 
-Consolida logs de sesión en el log maestro (JSONL):
+Consolida logs de sesion en el log maestro (JSONL):
 
 ```bash
 ./gobat -mode=organize
@@ -93,13 +93,13 @@ Procesados 5 archivos nuevos, 0 omitidos, 0 errores.
 ```
 **Log maestro**: `logs/master/master_YYYY-MM.jsonl` (un archivo por mes)
 
-## 🛠️ Cambios Comunes
+## Cambios Comunes
 
 ### Cambiar intervalo de muestreo
 
 Edita `internal/config/config.go`:
 ```go
-IntervaloSegundos: 10,  // Cambiar aquí (10, 30, 60 recomendado)
+IntervaloSegundos: 60,  // Cambiar aqui (10, 30, 60 recomendado)
 ```
 
 Recompila:
@@ -107,55 +107,56 @@ Recompila:
 go build -o gobat ./cmd/gobat
 ```
 
+### Usar directorio de logs personalizado
+
+```bash
+export GOBAT_LOG_DIR=/ruta/personalizada/logs
+./gobat -mode=log
+```
+
 ### Agregar nuevo dato del sistema
 
-1. Edita `internal/system/system.go` - Agrega función
+1. Edita `internal/system/system.go` - Agrega funcion
 2. Llámala en `GetSystemInfo()`
-3. Muéstrala en `internal/monitor/monitor.go`
+3. Muestrala en `internal/monitor/monitor.go`
 
-Ver detalles en [ARQUITECTURA.md](ARQUITECTURA.md#cómo-extender).
+Ver detalles en [ARQUITECTURA.md](ARQUITECTURA.md#como-extender).
 
-## 🧪 Testing
+## Testing
 
 ```bash
 go test ./...
 ```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
-| Problema | Solución |
+| Problema | Solucion |
 |----------|----------|
-| "no se encontró batería" | `upower -e` y instala upower |
-| "ya hay una instancia corriendo" | `rm logs/.organizar.lock` (Nota: los lock files ahora están en la raíz de `logs/`) |
+| "no se encontro bateria" | `upower -e` y instala upower |
+| "ya hay una instancia corriendo" | `rm logs/.organizar.lock` |
 | El binario no se crea | `go clean && go build -o gobat ./cmd/gobat` |
 | Tests fallan | Primero compila, luego testa |
 
-Ver más en [QUICK_REFERENCE.md](QUICK_REFERENCE.md#-troubleshooting-rápido).
+Ver mas en [QUICK_REFERENCE.md](QUICK_REFERENCE.md#troubleshooting-rapido).
 
-## 📊 Módulos
+## Modulos
 
-| Módulo | Responsabilidad | Líneas |
+| Modulo | Responsabilidad | Lineas |
 |--------|-----------------|--------|
-| `config/` | Configuración centralizada | 50 |
+| `config/` | Configuracion centralizada | 55 |
 | `monitor/` | Loop de monitoreo | 250 |
-| `organizer/` | Organización y consolidación | 320 |
-| `rotator/` | Rotación y compresión de logs | 180 |
-| `system/` | Datos del sistema | 450 |
+| `organizer/` | Organizacion + lock exclusivo | 100 |
+| `processor/` | Procesamiento de sesiones (core) | 250 |
+| `rotator/` | Rotacion y compresion de logs | 200 |
+| `system/` | Datos del sistema | 460 |
 | `utils/` | Utilidades compartidas | 110 |
 
-## ✅ Refactorización Completada
+## Variables de Entorno
 
-- ✅ Código modular (5 módulos independientes)
-- ✅ Sin dependencias externas
-- ✅ Documentación exhaustiva
-- ✅ Tests organizados
-- ✅ 100% compatible con versión anterior
-
-## 📚 Ver También
-
-- [CAMBIOS.md](CAMBIOS.md) - Lista de bugs revisados y estado
-- [ARQUITECTURA.md](ARQUITECTURA.md) - Diseño general del sistema
+| Variable | Descripcion |
+|----------|-------------|
+| `GOBAT_LOG_DIR` | Directorio raiz de logs (sobrescribe el calculo automatico) |
 
 ---
 
-**Construido con ❤️ en Go | Última actualización: 9 de mayo de 2026**
+**Construido en Go | Ultima actualizacion: 31 de mayo de 2026**
