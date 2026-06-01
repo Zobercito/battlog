@@ -32,12 +32,14 @@ func TestParseBatteryFloat(t *testing.T) {
 func TestEnrichBatteryInfoWear(t *testing.T) {
 	t.Parallel()
 
+	defaultMax := 1000
+
 	t.Run("normal wear", func(t *testing.T) {
 		m := BatteryInfo{
 			"energy-full":        "36.0 Wh",
 			"energy-full-design": "40.0 Wh",
 		}
-		enrichBatteryInfo(m)
+		enrichBatteryInfo(m, defaultMax)
 		if m["wear_level"] == "unknown" {
 			t.Fatal("wear_level should be computed")
 		}
@@ -51,7 +53,7 @@ func TestEnrichBatteryInfoWear(t *testing.T) {
 			"energy-full":        "40.0 Wh",
 			"energy-full-design": "40.0 Wh",
 		}
-		enrichBatteryInfo(m)
+		enrichBatteryInfo(m, defaultMax)
 		if m["wear_level"] != "0.0%" {
 			t.Errorf("expected 0.0%%, got %s", m["wear_level"])
 		}
@@ -59,7 +61,7 @@ func TestEnrichBatteryInfoWear(t *testing.T) {
 
 	t.Run("cannot compute", func(t *testing.T) {
 		m := BatteryInfo{}
-		enrichBatteryInfo(m)
+		enrichBatteryInfo(m, defaultMax)
 		if m["wear_level"] != "unknown" {
 			t.Errorf("expected unknown, got %s", m["wear_level"])
 		}
@@ -70,7 +72,7 @@ func TestEnrichBatteryInfoWear(t *testing.T) {
 			"energy-full":        "50.0 Wh", // higher than design? shouldn't happen but guard
 			"energy-full-design": "40.0 Wh",
 		}
-		enrichBatteryInfo(m)
+		enrichBatteryInfo(m, defaultMax)
 		if m["wear_level"] != "0.0%" {
 			t.Errorf("expected 0.0%%, got %s", m["wear_level"])
 		}
@@ -81,7 +83,7 @@ func TestEnrichBatteryInfoWear(t *testing.T) {
 			"energy-full":        "1.0 Wh",
 			"energy-full-design": "40.0 Wh",
 		}
-		enrichBatteryInfo(m)
+		enrichBatteryInfo(m, defaultMax)
 		if m["wear_level"] != "97.5%" {
 			t.Errorf("expected 97.5%%, got %s", m["wear_level"])
 		}
@@ -91,14 +93,27 @@ func TestEnrichBatteryInfoWear(t *testing.T) {
 func TestEnrichBatteryInfoCyclesRemaining(t *testing.T) {
 	t.Parallel()
 
-	t.Run("normal cycles", func(t *testing.T) {
+	defaultMax := 1000
+
+	t.Run("normal cycles with default max", func(t *testing.T) {
 		m := BatteryInfo{
 			"charge-cycles": "350",
 			"energy-full":   "40.0 Wh",
 		}
-		enrichBatteryInfo(m)
+		enrichBatteryInfo(m, defaultMax)
 		if m["cycles_remaining"] != "650" {
 			t.Errorf("expected 650, got %s", m["cycles_remaining"])
+		}
+	})
+
+	t.Run("normal cycles with custom max", func(t *testing.T) {
+		m := BatteryInfo{
+			"charge-cycles": "350",
+			"energy-full":   "40.0 Wh",
+		}
+		enrichBatteryInfo(m, 500)
+		if m["cycles_remaining"] != "150" {
+			t.Errorf("expected 150, got %s", m["cycles_remaining"])
 		}
 	})
 
@@ -107,7 +122,7 @@ func TestEnrichBatteryInfoCyclesRemaining(t *testing.T) {
 			"charge-cycles": "1200",
 			"energy-full":   "40.0 Wh",
 		}
-		enrichBatteryInfo(m)
+		enrichBatteryInfo(m, defaultMax)
 		if m["cycles_remaining"] != "0" {
 			t.Errorf("expected 0, got %s", m["cycles_remaining"])
 		}
@@ -115,16 +130,16 @@ func TestEnrichBatteryInfoCyclesRemaining(t *testing.T) {
 
 	t.Run("no cycles data", func(t *testing.T) {
 		m := BatteryInfo{}
-		enrichBatteryInfo(m)
+		enrichBatteryInfo(m, defaultMax)
 		if _, exists := m["cycles_remaining"]; exists {
 			t.Errorf("cycles_remaining should not be set when no charge-cycles")
 		}
 	})
 }
 
-func TestGetPowerProfileNotCrashing(t *testing.T) {
-	// This test just verifies the function doesn't panic.
-	// It may return "unknown" if powerprofilesctl is not installed.
+func TestGetPowerProfile(t *testing.T) {
+	// Verifica que getPowerProfile retorna un valor sin panic.
+	// Retorna "unknown" si powerprofilesctl no está instalado, lo cual es válido.
 	result := getPowerProfile()
 	if result == "" {
 		t.Error("power profile should not be empty")

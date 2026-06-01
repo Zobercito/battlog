@@ -53,7 +53,7 @@ func DetectBattery() (string, error) {
 }
 
 // GetBatteryInfo obtiene información de la batería desde upower
-func GetBatteryInfo(path string) BatteryInfo {
+func GetBatteryInfo(path string, maxCycles int) BatteryInfo {
 	m := make(BatteryInfo)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -77,7 +77,7 @@ func GetBatteryInfo(path string) BatteryInfo {
 		}
 	}
 
-	enrichBatteryInfo(m)
+	enrichBatteryInfo(m, maxCycles)
 	return m
 }
 
@@ -114,7 +114,9 @@ func GetSystemInfo() SystemInfo {
 	out["nvidia_gpu"] = getNVIDIAStatus()
 
 	// Memory usage
-	out["used"] = getMemoryUsage()
+	memUsedStr, memPctRaw := getMemoryUsage()
+	out["used"] = memUsedStr
+	out["memory_pct_raw"] = memPctRaw
 
 	// Swap usage
 	out["swap_used"] = getSwapUsage()
@@ -188,10 +190,10 @@ func getNVIDIAStatus() string {
 	return fmt.Sprintf("on (%s%% util, %s MB used)", util, memUsed)
 }
 
-func getMemoryUsage() string {
+func getMemoryUsage() (formatted, rawPct string) {
 	mem, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
-		return "unknown"
+		return "unknown", ""
 	}
 
 	var memTotal, memAvailable int64
@@ -218,9 +220,10 @@ func getMemoryUsage() string {
 		usedKB := memTotal - memAvailable
 		usedGB := float64(usedKB) / (1024.0 * 1024.0)
 		totalGB := float64(memTotal) / (1024.0 * 1024.0)
-		return fmt.Sprintf("%.1f GB / %.0f GB (%.0f%%)", usedGB, totalGB, (usedGB/totalGB)*100)
+		pct := int((usedGB / totalGB) * 100)
+		return fmt.Sprintf("%.1f GB / %.0f GB (%d%%)", usedGB, totalGB, pct), fmt.Sprintf("%d", pct)
 	}
-	return "unknown"
+	return "unknown", ""
 }
 
 func getSwapUsage() string {
@@ -276,7 +279,7 @@ func getWiFiStatus() string {
 		defer cancel()
 		out, err := exec.CommandContext(ctx, "nmcli", "-t", "connection", "show", "--active").Output()
 		if err != nil {
-			return "on (disconnected)"
+			return "unknown"
 		}
 		for _, line := range strings.Split(string(out), "\n") {
 			fields := strings.Split(line, ":")
@@ -313,7 +316,9 @@ func getBluetoothStatus() string {
 func getTopProcesses() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "aux", "--sort=-pcpu").Output()
+	cmd := exec.CommandContext(ctx, "ps", "aux", "--sort=-pcpu")
+	cmd.Env = append(os.Environ(), "LANG=C")
+	out, err := cmd.Output()
 	if err != nil {
 		return []string{"unavailable", "unavailable", "unavailable", "unavailable", "unavailable", "unavailable", "unavailable", "unavailable"}
 	}
@@ -363,7 +368,7 @@ func getTopProcesses() []string {
 	return topProcesses[:8]
 }
 
-func enrichBatteryInfo(m BatteryInfo) {
+func enrichBatteryInfo(m BatteryInfo, maxCycles int) {
 	current, currentOK := parseBatteryFloat(m["energy-full"])
 	design, designOK := parseBatteryFloat(m["energy-full-design"])
 	if currentOK && designOK && design > 0 {
@@ -382,7 +387,9 @@ func enrichBatteryInfo(m BatteryInfo) {
 	cyclesStr := m["charge-cycles"]
 	if cyclesStr != "" {
 		if cycles, err := strconv.Atoi(strings.TrimSpace(cyclesStr)); err == nil && cycles > 0 {
-			const maxCycles = 1000
+			if maxCycles <= 0 {
+				maxCycles = 1000
+			}
 			if cycles < maxCycles {
 				m["cycles_remaining"] = fmt.Sprintf("%d", maxCycles-cycles)
 			} else {

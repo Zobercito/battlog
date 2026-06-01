@@ -15,6 +15,14 @@ func main() {
 	mode := flag.String("mode", "log", "Modo: log o organize")
 	flag.Parse()
 
+	switch *mode {
+	case "log", "organize":
+		// válido
+	default:
+		fmt.Fprintf(os.Stderr, "ERROR: modo desconocido %q. Usa -mode=log o -mode=organize\n", *mode)
+		os.Exit(1)
+	}
+
 	// Cargar configuración
 	cfg := config.Load()
 
@@ -24,8 +32,5 @@ func main() {
 		monitor.Run(cfg)
 	case "organize":
 		organizer.Run(cfg)
-	default:
-		fmt.Fprintf(os.Stderr, "ERROR: modo desconocido %q. Usa -mode=log o -mode=organize\n", *mode)
-		os.Exit(1)
 	}
 }

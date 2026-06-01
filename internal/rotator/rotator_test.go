@@ -1,6 +1,7 @@
 package rotator
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,27 +68,28 @@ func TestRotateLogsMovesOldSession(t *testing.T) {
 	cfg.ComprimirAlRotar = false
 	cfg.RotarMaestroPorMes = false
 
-	if err := os.MkdirAll(cfg.LogDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.LogDir, config.DefaultPermissionDir); err != nil {
 		t.Fatal(err)
 	}
 
-	// Crear un log de sesión de hace 30 días
-	oldLogName := "log_2026-04-01_12-00-00.json"
-	oldLogPath := filepath.Join(cfg.LogDir, oldLogName)
-	if err := os.WriteFile(oldLogPath, []byte(`{"records":[{"ts":1}]}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Poner mtime viejo
+	// Crear un log de sesión de hace 30 días (nombre dinámico para que el test funcione siempre)
 	oldTime := time.Now().Add(-30 * 24 * time.Hour)
+	oldLogName := fmt.Sprintf("log_%s.json", oldTime.Format("2006-01-02_15-04-05"))
+	oldLogPath := filepath.Join(cfg.LogDir, oldLogName)
+	if err := os.WriteFile(oldLogPath, []byte(`{"records":[{"ts":1}]}`), config.DefaultPermissionFile); err != nil {
+		t.Fatal(err)
+	}
+
+	// Forzar mtime viejo para el chequeo por modtime
 	os.Chtimes(oldLogPath, oldTime, oldTime)
 
 	if err := RotateLogs(cfg); err != nil {
 		t.Fatalf("RotateLogs: %v", err)
 	}
 
-	// Verificar que se movió a archive
-	archPath := filepath.Join(cfg.ArchiveDir, "2026-04", oldLogName)
+	// Verificar que se movió a archive (directorio YYYY-MM dinámico)
+	archDir := oldTime.Format("2006-01")
+	archPath := filepath.Join(cfg.ArchiveDir, archDir, oldLogName)
 	if _, err := os.Stat(archPath); os.IsNotExist(err) {
 		t.Fatalf("session log not moved to archive: %s", archPath)
 	}

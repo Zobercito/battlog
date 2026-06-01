@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -14,16 +13,12 @@ import (
 	"gobat/internal/utils"
 )
 
-var logRe = regexp.MustCompile(`^log_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.json$`)
-
-var monthRe = regexp.MustCompile(`^master_(\d{4}-\d{2})\.jsonl$`)
-
 // RotateLogs rota y comprime logs según la configuración.
 // Se ejecuta al inicio del monitor y del organizador.
 func RotateLogs(cfg config.Config) error {
 	dirs := []string{cfg.LogsRoot, cfg.LogDir, cfg.MasterDir, cfg.ArchiveDir}
 	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0755); err != nil {
+		if err := os.MkdirAll(d, config.DefaultPermissionDir); err != nil {
 			return fmt.Errorf("creando directorio %s: %w", d, err)
 		}
 	}
@@ -46,7 +41,7 @@ func rotateSessionLogs(cfg config.Config) {
 		if entry.IsDir() {
 			continue
 		}
-		matches := logRe.FindStringSubmatch(entry.Name())
+		matches := config.LogFileRe.FindStringSubmatch(entry.Name())
 		if len(matches) < 7 {
 			continue
 		}
@@ -59,7 +54,7 @@ func rotateSessionLogs(cfg config.Config) {
 		}
 
 		archDir := filepath.Join(cfg.ArchiveDir, fmt.Sprintf("%s-%s", fileYear, fileMonth))
-		if err := os.MkdirAll(archDir, 0755); err != nil {
+		if err := os.MkdirAll(archDir, config.DefaultPermissionDir); err != nil {
 			log.Printf("Aviso: no se pudo crear %s: %v", archDir, err)
 			continue
 		}
@@ -74,7 +69,9 @@ func rotateSessionLogs(cfg config.Config) {
 
 		if cfg.ComprimirAlRotar {
 			gzPath := dstPath + ".gz"
-			if err := utils.GzipFile(dstPath, gzPath); err != nil {
+			if _, err := os.Stat(gzPath); err == nil {
+				log.Printf("Aviso: %s ya existe, se omite compresión", filepath.Base(gzPath))
+			} else if err := utils.GzipFile(dstPath, gzPath); err != nil {
 				log.Printf("Aviso: no se pudo comprimir %s: %v", entry.Name(), err)
 				continue
 			}
@@ -115,13 +112,13 @@ func rotateMasterLog(cfg config.Config) {
 		}
 
 		// Mover master de mes anterior a archive
-		monthMatch := monthRe.FindStringSubmatch(entry.Name())
+		monthMatch := config.MonthRe.FindStringSubmatch(entry.Name())
 		if monthMatch == nil {
 			continue
 		}
 
 		archDir := filepath.Join(cfg.ArchiveDir, monthMatch[1])
-		if err := os.MkdirAll(archDir, 0755); err != nil {
+		if err := os.MkdirAll(archDir, config.DefaultPermissionDir); err != nil {
 			log.Printf("Aviso: no se pudo crear %s: %v", archDir, err)
 			continue
 		}
@@ -147,7 +144,10 @@ func rotateMasterLog(cfg config.Config) {
 		log.Printf("Master rotado: %s → archive", entry.Name())
 	}
 
-	// Limpiar archivos viejos del archive si RetencionDias > 0
+	// Limpiar archivos viejos del archive si RetencionDias > 0.
+	// Por defecto RetencionDias=0 lo que significa retención infinita
+	// (el diseño es intencionalmente de logging infinito). Solo se limpia
+	// cuando el usuario configura explícitamente un valor > 0.
 	if cfg.RetencionDias > 0 {
 		cleanupOldArchives(cfg)
 	}
@@ -155,6 +155,7 @@ func rotateMasterLog(cfg config.Config) {
 
 func cleanupOldArchives(cfg config.Config) {
 	cutoff := time.Now().Add(-time.Duration(cfg.RetencionDias) * 24 * time.Hour)
+	removed := make(map[string]bool)
 
 	filepath.Walk(cfg.ArchiveDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -173,6 +174,8 @@ func cleanupOldArchives(cfg config.Config) {
 			if monthEnd.Before(cutoff) {
 				if rmErr := os.Remove(path); rmErr != nil {
 					log.Printf("Aviso: no se pudo eliminar %s: %v", path, rmErr)
+				} else {
+					removed[filepath.Dir(path)] = true
 				}
 			}
 			return nil
@@ -182,10 +185,21 @@ func cleanupOldArchives(cfg config.Config) {
 		if info.ModTime().Before(cutoff) {
 			if rmErr := os.Remove(path); rmErr != nil {
 				log.Printf("Aviso: no se pudo eliminar %s: %v", path, rmErr)
+			} else {
+				removed[filepath.Dir(path)] = true
 			}
 		}
 		return nil
 	})
+
+	// Limpiar directorios vacíos después de eliminar archivos
+	for dir := range removed {
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
+			if rmErr := os.Remove(dir); rmErr != nil && !os.IsNotExist(rmErr) {
+				log.Printf("Aviso: no se pudo eliminar directorio vacío %s: %v", dir, rmErr)
+			}
+		}
+	}
 }
 
 // CurrentMasterPath devuelve la ruta al log maestro del mes actual
@@ -205,7 +219,7 @@ func SessionLogPathsSorted(cfg config.Config) ([]string, error) {
 
 	var paths []string
 	for _, e := range entries {
-		if !e.IsDir() && logRe.MatchString(e.Name()) {
+		if !e.IsDir() && config.LogFileRe.MatchString(e.Name()) {
 			paths = append(paths, filepath.Join(cfg.LogDir, e.Name()))
 		}
 	}
