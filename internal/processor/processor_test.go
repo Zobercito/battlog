@@ -1,7 +1,6 @@
 package processor
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -106,16 +105,9 @@ func TestParseJSONLinesEmpty(t *testing.T) {
 func TestParseSessionJSON(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-
 	t.Run("valid JSON with records array", func(t *testing.T) {
-		content := `{"meta":{},"records":[{"ts":1},{"ts":2}]}`
-		path := filepath.Join(dir, "valid.json")
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		records, err := parseSessionJSON(path)
+		content := []byte(`{"meta":{},"records":[{"ts":1},{"ts":2}]}`)
+		records, err := parseSessionJSON(content)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -125,16 +117,9 @@ func TestParseSessionJSON(t *testing.T) {
 	})
 
 	t.Run("fallback to line parsing for non-wrapper JSON", func(t *testing.T) {
-		// This format is NOT wrapped in a JSON object — parseSessionJSON
-		// will fail json.Unmarshal into {Records} and fall back to parseJSONLines.
-		content := `{"ts":1}
-{"ts":2}`
-		path := filepath.Join(dir, "line_separated.jsonl")
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatal(err)
-		}
-
-		records, err := parseSessionJSON(path)
+		content := []byte(`{"ts":1}
+{"ts":2}`)
+		records, err := parseSessionJSON(content)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -143,10 +128,10 @@ func TestParseSessionJSON(t *testing.T) {
 		}
 	})
 
-	t.Run("non-existent file", func(t *testing.T) {
-		_, err := parseSessionJSON("/nonexistent/path.json")
+	t.Run("empty data", func(t *testing.T) {
+		_, err := parseSessionJSON([]byte{})
 		if err == nil {
-			t.Fatal("expected error for non-existent file")
+			t.Fatal("expected error for empty data")
 		}
 	})
 }

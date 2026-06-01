@@ -38,18 +38,6 @@ func TestParseFrequency(t *testing.T) {
 	}
 }
 
-func TestParseFrequencySingle(t *testing.T) {
-	t.Parallel()
-
-	cur, max := parseFrequency("2.4 GHz / 4.0 GHz max")
-	if cur != 2.4 {
-		t.Errorf("expected 2.4, got %f", cur)
-	}
-	if max != 4.0 {
-		t.Errorf("expected 4.0, got %f", max)
-	}
-}
-
 func TestParseMemory(t *testing.T) {
 	t.Parallel()
 

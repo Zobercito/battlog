@@ -5,18 +5,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 
 	"gobat/internal/config"
 	"gobat/internal/rotator"
 )
-
-var sessionRe = regexp.MustCompile(`^log_(\d{4})-(\d{2})-\d{2}_\d{2}-\d{2}-\d{2}\.json$`)
 
 // ProcessSessionLogs consolida sesiones en el log maestro (core compartido)
 func ProcessSessionLogs(cfg config.Config) {
@@ -52,7 +50,7 @@ func ProcessSessionLogs(cfg config.Config) {
 	erroresProcesamiento := 0
 
 	masterPath := rotator.CurrentMasterPath(cfg)
-	masterF, err := os.OpenFile(masterPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	masterF, err := os.OpenFile(masterPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, config.DefaultPermissionFile)
 	if err != nil {
 		log.Printf("ERROR abriendo log maestro: %v", err)
 		return
@@ -65,7 +63,7 @@ func ProcessSessionLogs(cfg config.Config) {
 	}
 	defer syscall.Flock(int(masterF.Fd()), syscall.LOCK_UN)
 
-	controlF, err := os.OpenFile(cfg.ControlFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	controlF, err := os.OpenFile(cfg.ControlFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, config.DefaultPermissionFile)
 	if err != nil {
 		log.Printf("ERROR abriendo archivo de control: %v", err)
 		return
@@ -79,6 +77,7 @@ func ProcessSessionLogs(cfg config.Config) {
 			continue
 		}
 
+		var rawData []byte
 		testLockF, err := os.OpenFile(sessionPath, os.O_RDONLY, 0)
 		if err == nil {
 			errLock := syscall.Flock(int(testLockF.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
@@ -87,17 +86,31 @@ func ProcessSessionLogs(cfg config.Config) {
 				omitidos++
 				continue
 			}
+			rawData, err = io.ReadAll(testLockF)
 			syscall.Flock(int(testLockF.Fd()), syscall.LOCK_UN)
 			testLockF.Close()
+			if err != nil {
+				log.Printf("Aviso: no se pudo leer %s: %v", fileName, err)
+				omitidos++
+				continue
+			}
+		} else {
+			// Si no podemos abrir, leer via ReadFile (sin lock)
+			rawData, err = os.ReadFile(sessionPath)
+			if err != nil {
+				log.Printf("Aviso: no se pudo leer %s: %v", fileName, err)
+				omitidos++
+				continue
+			}
 		}
 
-		matches := sessionRe.FindStringSubmatch(fileName)
+		matches := config.LogFileRe.FindStringSubmatch(fileName)
 		if len(matches) < 3 {
 			omitidos++
 			continue
 		}
 
-		records, parseErr := parseSessionJSON(sessionPath)
+		records, parseErr := parseSessionJSON(rawData)
 		if parseErr != nil {
 			log.Printf("Aviso: no se pudo parsear %s: %v", fileName, parseErr)
 			erroresProcesamiento++
@@ -149,10 +162,9 @@ func ProcessSessionLogs(cfg config.Config) {
 	}
 }
 
-func parseSessionJSON(path string) ([][]byte, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+func parseSessionJSON(data []byte) ([][]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("archivo vacío")
 	}
 
 	var wrapper struct {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,13 +28,25 @@ func Run(cfg config.Config) {
 	}
 	defer releaseLock()
 
+	// Capturar señales para liberar lock si nos interrumpen
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	go func() {
+		<-sigCh
+		log.Println("Señal recibida, liberando lock y saliendo...")
+		releaseLock()
+		os.Exit(0)
+	}()
+
 	processor.ProcessSessionLogs(cfg)
 }
 
 // acquireLock obtiene un lock exclusivo para el organizador
 func acquireLock(lockPath string) (func(), error) {
 	for attempt := 0; attempt < 2; attempt++ {
-		lockF, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		lockF, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, config.DefaultPermissionFile)
 		if err == nil {
 			if _, wErr := lockF.WriteString(strconv.Itoa(os.Getpid())); wErr != nil {
 				lockF.Close()
@@ -66,8 +79,11 @@ func acquireLock(lockPath string) (func(), error) {
 
 		pidStr := strings.TrimSpace(string(pidBytes))
 		pid, pErr := strconv.Atoi(pidStr)
-		if pErr != nil || pid <= 0 {
-			return nil, fmt.Errorf("lock en estado inconsistente o en creación: %w", pErr)
+		if pErr != nil {
+			return nil, fmt.Errorf("lock contiene PID inválido %q: %w", pidStr, pErr)
+		}
+		if pid <= 0 {
+			return nil, fmt.Errorf("lock contiene PID inválido %q", pidStr)
 		}
 
 		if isProcessAlive(pid) {

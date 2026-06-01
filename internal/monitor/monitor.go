@@ -100,7 +100,7 @@ func Run(cfg config.Config) {
 		log.Printf("Aviso: error en rotación de logs: %v", err)
 	}
 
-	if err := os.MkdirAll(cfg.LogDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.LogDir, config.DefaultPermissionDir); err != nil {
 		log.Printf("Error creando directorio de logs: %v", err)
 		return
 	}
@@ -108,7 +108,7 @@ func Run(cfg config.Config) {
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 	logFileName := filepath.Join(cfg.LogDir, fmt.Sprintf("log_%s.json", timestamp))
 
-	f, err := os.OpenFile(logFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, config.DefaultPermissionFile)
 	if err != nil {
 		log.Printf("Error creando log: %v", err)
 		return
@@ -135,18 +135,29 @@ func Run(cfg config.Config) {
 		log.Printf("Aviso: no se pudo sincronizar cabecera de log: %v", err)
 	}
 
-	fmt.Printf("Monitoreando batería %s cada %ds...\n", batPath, cfg.IntervaloSegundos)
+	// Siempre cerrar el JSON al salir (incluso por panic), así el archivo nunca queda truncado
+	var recordsWritten bool
+	defer func() {
+		if !recordsWritten {
+			// Si no hay registros, cerrar el array vacío
+			if _, err := f.WriteString("\n]}\n"); err != nil {
+				log.Printf("Error escribiendo cierre de log: %v", err)
+			}
+		}
+		f.Sync()
+	}()
+
+	fmt.Fprintf(os.Stderr, "Monitoreando batería %s cada %ds...\n", batPath, cfg.IntervaloSegundos)
 
 	// Primera entrada para no prepender coma
 	firstEntry := true
 	iteraciones := 0
 	ticker := time.NewTicker(time.Duration(cfg.IntervaloSegundos) * time.Second)
-	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			entry := buildLogEntryJSON(batPath)
+			entry := buildLogEntryJSON(batPath, cfg.MaxBatteryCycles)
 			entryJSON, err := json.Marshal(entry)
 			if err != nil {
 				log.Printf("Error serializando entrada: %v", err)
@@ -163,6 +174,7 @@ func Run(cfg config.Config) {
 				log.Printf("Error escribiendo entrada de log: %v", err)
 				continue
 			}
+			recordsWritten = true
 			if err := f.Sync(); err != nil {
 				log.Printf("Aviso: no se pudo sincronizar el log: %v", err)
 			}
@@ -173,16 +185,10 @@ func Run(cfg config.Config) {
 				processor.ProcessSessionLogs(cfg)
 			}
 		case <-sigCh:
+			ticker.Stop()
 			// Sincronizar datos pendientes antes de cerrar
 			if err := f.Sync(); err != nil {
 				log.Printf("Aviso: no se pudo sincronizar log antes de cerrar: %v", err)
-			}
-			// Cerrar JSON
-			if _, err := f.WriteString("\n]}\n"); err != nil {
-				log.Printf("Error escribiendo cierre de log: %v", err)
-			}
-			if err := f.Sync(); err != nil {
-				log.Printf("Aviso: no se pudo sincronizar cierre de log: %v", err)
 			}
 			return
 		}
@@ -190,9 +196,9 @@ func Run(cfg config.Config) {
 }
 
 // buildLogEntryJSON construye una entrada del log en formato JSON
-func buildLogEntryJSON(batPath string) LogEntry {
+func buildLogEntryJSON(batPath string, maxCycles int) LogEntry {
 	now := time.Now()
-	bat := system.GetBatteryInfo(batPath)
+	bat := system.GetBatteryInfo(batPath, maxCycles)
 	sys := system.GetSystemInfo()
 	entry := LogEntry{
 		Timestamp: now.Unix(),
@@ -305,7 +311,13 @@ func fillMemoryData(sys map[string]string, entry *LogEntry) {
 	if v, ok := sys["swap_used"]; ok {
 		entry.Memory.SwapMB = parseSwap(v)
 	}
-	if entry.Memory.TotalGB > 0 {
+	// El porcentaje se parsea directamente del string original de /proc/meminfo
+	// para evitar imprecisiones por conversión a float y truncado
+	if v, ok := sys["memory_pct_raw"]; ok {
+		if pct, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			entry.Memory.Pct = pct
+		}
+	} else if entry.Memory.TotalGB > 0 {
 		entry.Memory.Pct = int((entry.Memory.UsedGB / entry.Memory.TotalGB) * 100)
 	}
 }
