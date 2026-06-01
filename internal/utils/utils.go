@@ -1,10 +1,53 @@
 package utils
 
 import (
+	"compress/gzip"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 )
+
+// GzipFile comprime un archivo con gzip de forma segura (atómica)
+func GzipFile(src, dst string) error {
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	tmpDst := dst + ".tmp"
+	d, err := os.Create(tmpDst)
+	if err != nil {
+		return err
+	}
+
+	w := gzip.NewWriter(d)
+	if _, err := io.Copy(w, f); err != nil {
+		w.Close()
+		d.Close()
+		os.Remove(tmpDst)
+		return err
+	}
+
+	if err := w.Close(); err != nil {
+		d.Close()
+		os.Remove(tmpDst)
+		return err
+	}
+
+	if err := d.Close(); err != nil {
+		os.Remove(tmpDst)
+		return err
+	}
+
+	if err := os.Rename(tmpDst, dst); err != nil {
+		os.Remove(tmpDst)
+		return err
+	}
+
+	return nil
+}
 
 // ReadIntFile lee un archivo que contiene un entero
 func ReadIntFile(path string) (int64, error) {
