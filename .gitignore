@@ -5,13 +5,8 @@ dashboard
 # Repomix generated output
 repomix-output.xml
 
-# Logs
-logs/logs/
-logs/current/
-logs/master/
-logs/archive/
-logs/logs_todo.json
-logs/archivos_procesados.txt
+# Logs (todo el directorio de datos generados)
+logs/
 
 # IDE
 .vscode/
