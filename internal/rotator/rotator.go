@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"gobat/internal/config"
-	"gobat/internal/utils"
+	"battlog/internal/config"
+	"battlog/internal/utils"
 )
 
 // RotateLogs rota y comprime logs según la configuración.

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"syscall"
 
-	"gobat/internal/config"
-	"gobat/internal/rotator"
+	"battlog/internal/config"
+	"battlog/internal/rotator"
 )
 
 // ProcessSessionLogs consolida sesiones en el log maestro (core compartido)

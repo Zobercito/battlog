@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"gobat/internal/config"
-	"gobat/internal/processor"
-	"gobat/internal/rotator"
-	"gobat/internal/system"
+	"battlog/internal/config"
+	"battlog/internal/processor"
+	"battlog/internal/rotator"
+	"battlog/internal/system"
 )
 
 // LogEntry representa un registro individual del log en formato JSON

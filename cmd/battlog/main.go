@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"gobat/internal/config"
-	"gobat/internal/monitor"
-	"gobat/internal/organizer"
+	"battlog/internal/config"
+	"battlog/internal/monitor"
+	"battlog/internal/organizer"
 )
 
 func main() {

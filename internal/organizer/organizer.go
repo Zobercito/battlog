@@ -10,9 +10,9 @@ import (
 	"strings"
 	"syscall"
 
-	"gobat/internal/config"
-	"gobat/internal/processor"
-	"gobat/internal/rotator"
+	"battlog/internal/config"
+	"battlog/internal/processor"
+	"battlog/internal/rotator"
 )
 
 // Run ejecuta la organización con lock exclusivo (modo independiente)
@@ -99,7 +99,7 @@ func acquireLock(lockPath string) (func(), error) {
 	return nil, fmt.Errorf("no se pudo adquirir lock")
 }
 
-// isProcessAlive verifica si un proceso con PID está vivo y es gobat
+// isProcessAlive verifica si un proceso con PID está vivo y es battlog
 func isProcessAlive(pid int) bool {
 	pidExePath := fmt.Sprintf("/proc/%d/exe", pid)
 

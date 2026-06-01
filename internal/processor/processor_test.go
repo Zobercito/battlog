@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gobat/internal/config"
+	"battlog/internal/config"
 )
 
 func TestSplitJSONObjects(t *testing.T) {

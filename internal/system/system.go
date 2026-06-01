@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"gobat/internal/utils"
+	"battlog/internal/utils"
 )
 
 // BatteryInfo contiene información de la batería

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"gobat/internal/config"
+	"battlog/internal/config"
 )
 
 func TestCurrentMasterPath(t *testing.T) {
