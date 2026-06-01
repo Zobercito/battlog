@@ -47,3 +47,67 @@ func TestConfigPathsAbsolute(t *testing.T) {
 		t.Fatal("ArchiveDir should differ from LogsRoot")
 	}
 }
+
+func TestValidate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid config", func(t *testing.T) {
+		cfg := Config{
+			LogsRoot:          "/tmp/test",
+			IntervaloSegundos: 60,
+			DiasEnVivo:        7,
+			RetencionDias:     30,
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("zero interval", func(t *testing.T) {
+		cfg := Config{
+			IntervaloSegundos: 0,
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected error for zero interval")
+		}
+	})
+
+	t.Run("negative interval", func(t *testing.T) {
+		cfg := Config{
+			IntervaloSegundos: -5,
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected error for negative interval")
+		}
+	})
+
+	t.Run("negative DiasEnVivo", func(t *testing.T) {
+		cfg := Config{
+			IntervaloSegundos: 60,
+			DiasEnVivo:        -1,
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected error for negative DiasEnVivo")
+		}
+	})
+
+	t.Run("negative RetencionDias", func(t *testing.T) {
+		cfg := Config{
+			IntervaloSegundos: 60,
+			RetencionDias:     -1,
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected error for negative RetencionDias")
+		}
+	})
+
+	t.Run("empty LogsRoot", func(t *testing.T) {
+		cfg := Config{
+			LogsRoot:          "",
+			IntervaloSegundos: 60,
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected error for empty LogsRoot")
+		}
+	})
+}

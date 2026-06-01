@@ -157,12 +157,31 @@ func cleanupOldArchives(cfg config.Config) {
 	cutoff := time.Now().Add(-time.Duration(cfg.RetencionDias) * 24 * time.Hour)
 
 	filepath.Walk(cfg.ArchiveDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil {
+			log.Printf("Aviso: error accediendo a %s: %v", path, err)
 			return nil
 		}
+		if info.IsDir() {
+			return nil
+		}
+
+		// Usar la fecha del directorio padre (YYYY-MM) en vez de ModTime
+		parentDir := filepath.Base(filepath.Dir(path))
+		dirTime, parseErr := time.Parse("2006-01", parentDir)
+		if parseErr == nil {
+			monthEnd := dirTime.AddDate(0, 1, -1)
+			if monthEnd.Before(cutoff) {
+				if rmErr := os.Remove(path); rmErr != nil {
+					log.Printf("Aviso: no se pudo eliminar %s: %v", path, rmErr)
+				}
+			}
+			return nil
+		}
+
+		// Fallback a ModTime si el directorio no tiene formato de fecha
 		if info.ModTime().Before(cutoff) {
-			if err := os.Remove(path); err != nil {
-				log.Printf("Aviso: no se pudo eliminar %s: %v", path, err)
+			if rmErr := os.Remove(path); rmErr != nil {
+				log.Printf("Aviso: no se pudo eliminar %s: %v", path, rmErr)
 			}
 		}
 		return nil

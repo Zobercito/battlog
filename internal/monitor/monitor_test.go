@@ -42,8 +42,12 @@ func TestParseFrequencySingle(t *testing.T) {
 	t.Parallel()
 
 	cur, max := parseFrequency("2.4 GHz / 4.0 GHz max")
-	_ = cur
-	_ = max
+	if cur != 2.4 {
+		t.Errorf("expected 2.4, got %f", cur)
+	}
+	if max != 4.0 {
+		t.Errorf("expected 4.0, got %f", max)
+	}
 }
 
 func TestParseMemory(t *testing.T) {
@@ -106,7 +110,7 @@ func TestFillBatteryData(t *testing.T) {
 		"voltage":     "12.3 V",
 	}
 	entry := &LogEntry{}
-	fillBatteryData(bat, nil, entry)
+	fillBatteryData(bat, map[string]string{}, entry)
 
 	if entry.Battery.Percentage != 85 {
 		t.Errorf("expected 85, got %d", entry.Battery.Percentage)

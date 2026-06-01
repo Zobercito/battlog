@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"gobat/internal/config"
-	"gobat/internal/organizer"
+	"gobat/internal/processor"
 	"gobat/internal/rotator"
 	"gobat/internal/system"
 )
@@ -170,7 +170,7 @@ func Run(cfg config.Config) {
 			// Organizar automáticamente cada N iteraciones
 			iteraciones++
 			if cfg.OrganizarCadaIteraciones > 0 && iteraciones%cfg.OrganizarCadaIteraciones == 0 {
-				organizer.RunWithoutLock(cfg)
+				processor.ProcessSessionLogs(cfg)
 			}
 		case <-sigCh:
 			// Sincronizar datos pendientes antes de cerrar
@@ -244,8 +244,10 @@ func fillBatteryData(bat, sys map[string]string, entry *LogEntry) {
 			}
 		}
 	}
-	if v, ok := sys["power_profile"]; ok {
-		entry.Battery.PowerProfile = v
+	if sys != nil {
+		if v, ok := sys["power_profile"]; ok {
+			entry.Battery.PowerProfile = v
+		}
 	}
 }
 
