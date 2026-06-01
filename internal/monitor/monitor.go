@@ -1,18 +1,90 @@
 package monitor
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"gobat/internal/config"
+	"gobat/internal/rotator"
 	"gobat/internal/system"
 )
+
+// LogEntry representa un registro individual del log en formato JSON
+type LogEntry struct {
+	Timestamp    int64            `json:"timestamp"`
+	Datetime     string           `json:"datetime"`
+	Battery      BatteryData      `json:"battery"`
+	Health       HealthData       `json:"health"`
+	CPU          CPUData          `json:"cpu"`
+	Memory       MemoryData       `json:"memory"`
+	Display      DisplayData      `json:"display"`
+	GPU          GPUData          `json:"gpu"`
+	TopProcesses []ProcessData    `json:"top_processes"`
+	Connectivity ConnectivityData `json:"connectivity"`
+}
+
+type BatteryData struct {
+	Percentage   int     `json:"percentage"`
+	State        string  `json:"state"`
+	PowerW       float64 `json:"power_w"`
+	Voltage      float64 `json:"voltage"`
+	TimeEmptyMin int     `json:"time_empty_min"`
+	TimeFullMin  int     `json:"time_full_min"`
+	PowerProfile string  `json:"power_profile"`
+	Temperature  float64 `json:"temperature"`
+}
+
+type HealthData struct {
+	Cycles          int     `json:"cycles"`
+	CyclesRemaining int     `json:"cycles_remaining"`
+	CapacityCurrent float64 `json:"capacity_current_wh"`
+	CapacityDesign  float64 `json:"capacity_design_wh"`
+	WearPct         float64 `json:"wear_pct"`
+}
+
+type CPUData struct {
+	FreqGHz    float64 `json:"freq_ghz"`
+	FreqMaxGHz float64 `json:"freq_max_ghz"`
+	TempC      int     `json:"temp_c"`
+	Load1Min   float64 `json:"load_1min"`
+	Throttling bool    `json:"throttling"`
+}
+
+type MemoryData struct {
+	UsedGB  float64 `json:"used_gb"`
+	TotalGB float64 `json:"total_gb"`
+	Pct     int     `json:"pct"`
+	SwapMB  int     `json:"swap_mb"`
+}
+
+type DisplayData struct {
+	BrightnessPct int `json:"brightness_pct"`
+}
+
+type GPUData struct {
+	NvidiaActive bool   `json:"nvidia_active"`
+	Mode         string `json:"mode"`
+}
+
+type ProcessData struct {
+	Name   string  `json:"name"`
+	CPUPct float64 `json:"cpu_pct"`
+	MemMB  int     `json:"mem_mb"`
+}
+
+type ConnectivityData struct {
+	WiFi      bool `json:"wifi"`
+	Bluetooth bool `json:"bluetooth"`
+}
 
 // Run inicia el monitor de batería
 func Run(cfg config.Config) {
@@ -22,13 +94,18 @@ func Run(cfg config.Config) {
 		return
 	}
 
+	// Rotar logs viejos antes de empezar a monitorear
+	if err := rotator.RotateLogs(cfg); err != nil {
+		log.Printf("Aviso: error en rotación de logs: %v", err)
+	}
+
 	if err := os.MkdirAll(cfg.LogDir, 0755); err != nil {
 		log.Printf("Error creando directorio de logs: %v", err)
 		return
 	}
 
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
-	logFileName := filepath.Join(cfg.LogDir, fmt.Sprintf("log_%s.txt", timestamp))
+	logFileName := filepath.Join(cfg.LogDir, fmt.Sprintf("log_%s.json", timestamp))
 
 	f, err := os.OpenFile(logFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -46,15 +123,10 @@ func Run(cfg config.Config) {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
-	if _, err := fmt.Fprintf(f, "--- Inicio del Log: %s ---\n", time.Now().Format(time.RFC1123)); err != nil {
-		log.Printf("Error escribiendo cabecera de log: %v", err)
-		return
-	}
-	if _, err := fmt.Fprintf(f, "--- Dispositivo: %s ---\n", batPath); err != nil {
-		log.Printf("Error escribiendo cabecera de log: %v", err)
-		return
-	}
-	if _, err := fmt.Fprintf(f, "--- Intervalo: %ds ---\n\n", cfg.IntervaloSegundos); err != nil {
+	// Escribir cabecera JSON
+	header := fmt.Sprintf("{\"meta\":{\"device\":\"%s\",\"interval_sec\":%d,\"start_time\":\"%s\"},\n\"records\":[\n",
+		batPath, cfg.IntervaloSegundos, time.Now().Format(time.RFC3339))
+	if _, err := f.WriteString(header); err != nil {
 		log.Printf("Error escribiendo cabecera de log: %v", err)
 		return
 	}
@@ -64,15 +136,28 @@ func Run(cfg config.Config) {
 
 	fmt.Printf("Monitoreando batería %s cada %ds...\n", batPath, cfg.IntervaloSegundos)
 
+	// Primera entrada para no prepender coma
+	firstEntry := true
 	ticker := time.NewTicker(time.Duration(cfg.IntervaloSegundos) * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			body := buildLogEntry(batPath)
-			entry := fmt.Sprintf("--- %s ---\n%s\n\n", time.Now().Format("2006-01-02 15:04:05"), body)
-			if _, err := f.WriteString(entry); err != nil {
+			entry := buildLogEntryJSON(batPath)
+			entryJSON, err := json.Marshal(entry)
+			if err != nil {
+				log.Printf("Error serializando entrada: %v", err)
+				continue
+			}
+			if !firstEntry {
+				if _, err := f.WriteString(",\n"); err != nil {
+					log.Printf("Error escribiendo separador: %v", err)
+					continue
+				}
+			}
+			firstEntry = false
+			if _, err := f.Write(entryJSON); err != nil {
 				log.Printf("Error escribiendo entrada de log: %v", err)
 				continue
 			}
@@ -80,117 +165,223 @@ func Run(cfg config.Config) {
 				log.Printf("Aviso: no se pudo sincronizar el log: %v", err)
 			}
 		case <-sigCh:
-			if _, err := fmt.Fprintf(f, "\n--- Fin del Log: %s ---\n", time.Now().Format(time.RFC1123)); err != nil {
+			// Sincronizar datos pendientes antes de cerrar
+			if err := f.Sync(); err != nil {
+				log.Printf("Aviso: no se pudo sincronizar log antes de cerrar: %v", err)
+			}
+			// Cerrar JSON
+			if _, err := f.WriteString("\n]}\n"); err != nil {
 				log.Printf("Error escribiendo cierre de log: %v", err)
+			}
+			if err := f.Sync(); err != nil {
+				log.Printf("Aviso: no se pudo sincronizar cierre de log: %v", err)
 			}
 			return
 		}
 	}
 }
 
-// buildLogEntry construye una entrada completa del log con información de sistema
-func buildLogEntry(batPath string) string {
+// buildLogEntryJSON construye una entrada del log en formato JSON
+func buildLogEntryJSON(batPath string) LogEntry {
 	bat := system.GetBatteryInfo(batPath)
 	sys := system.GetSystemInfo()
-
-	var b strings.Builder
-
-	// Battery Status Section
-	b.WriteString("Battery Status:\n")
-	writeKV := func(key, display string) {
-		if v, ok := bat[key]; ok && v != "" {
-			b.WriteString(fmt.Sprintf("  %-24s : %s\n", display, v))
-		} else {
-			b.WriteString(fmt.Sprintf("  %-24s : %s\n", display, "N/A"))
-		}
+	entry := LogEntry{
+		Timestamp: time.Now().Unix(),
+		Datetime:  time.Now().Format("2006-01-02 15:04:05"),
 	}
 
-	writeKV("state", "state")
-	writeKV("percentage", "percentage")
-	writeKV("energy-rate", "energy-rate")
-	writeKV("voltage", "voltage")
+	fillBatteryData(bat, sys, &entry)
+	fillHealthData(bat, &entry)
+	fillCPUData(sys, &entry)
+	fillMemoryData(sys, &entry)
+	fillGPUData(sys, &entry)
+	fillDisplayData(sys, &entry)
+	fillProcessesData(sys, &entry)
+	fillConnectivityData(sys, &entry)
 
-	if v, ok := bat["time to full"]; ok && v != "" {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "time to full", v))
+	return entry
+}
+
+func fillBatteryData(bat, sys map[string]string, entry *LogEntry) {
+	if v, ok := bat["percentage"]; ok {
+		if pct, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			entry.Battery.Percentage = pct
+		}
+	}
+	if v, ok := bat["state"]; ok {
+		entry.Battery.State = v
+	}
+	if v, ok := bat["energy-rate"]; ok {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(strings.Replace(v, " W", "", 1)), 64); err == nil {
+			entry.Battery.PowerW = val
+		}
+	}
+	if v, ok := bat["voltage"]; ok {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(strings.Replace(v, " V", "", 1)), 64); err == nil {
+			entry.Battery.Voltage = val
+		}
 	}
 	if v, ok := bat["time to empty"]; ok && v != "" {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "time to empty", v))
+		entry.Battery.TimeEmptyMin = parseTimeToMinutes(v)
 	}
-
-	if v, ok := sys["power_profile"]; ok {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "power_profile", v))
+	if v, ok := bat["time to full"]; ok && v != "" {
+		entry.Battery.TimeFullMin = parseTimeToMinutes(v)
 	}
-
-	// Battery Health Section
-	b.WriteString("\nBattery Health:\n")
-	writeKV("charge-cycles", "cycles")
-	writeKV("energy-full", "capacity (current)")
-	writeKV("energy-full-design", "capacity (design)")
-	writeKV("wear_level", "wear_level")
-
-	// CPU Section
-	b.WriteString("\nCPU:\n")
-	cpuKeys := []string{"current_frequency", "cpu_temp", "load_avg (1min)", "thermal_throttling"}
-	for _, k := range cpuKeys {
-		if v, ok := sys[k]; ok && v != "" {
-			b.WriteString(fmt.Sprintf("  %-24s : %s\n", k, v))
-		} else {
-			b.WriteString(fmt.Sprintf("  %-24s : %s\n", k, "N/A"))
+	if v, ok := bat["temperature"]; ok {
+		parts := strings.Fields(v)
+		if len(parts) > 0 {
+			if val, err := strconv.ParseFloat(parts[0], 64); err == nil {
+				entry.Battery.Temperature = val
+			}
 		}
 	}
-
-	// GPU Section
-	b.WriteString("\nGPU:\n")
-	if v, ok := sys["nvidia_gpu"]; ok {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "nvidia_gpu", v))
-	} else {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "nvidia_gpu", "N/A"))
+	if v, ok := sys["power_profile"]; ok {
+		entry.Battery.PowerProfile = v
 	}
+}
 
-	// Memory Section
-	b.WriteString("\nMemory:\n")
+func fillHealthData(bat map[string]string, entry *LogEntry) {
+	if v, ok := bat["charge-cycles"]; ok {
+		if cycles, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			entry.Health.Cycles = cycles
+		}
+	}
+	if v, ok := bat["cycles_remaining"]; ok {
+		if remaining, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			entry.Health.CyclesRemaining = remaining
+		}
+	}
+	if v, ok := bat["energy-full"]; ok {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(strings.Replace(v, " Wh", "", 1)), 64); err == nil {
+			entry.Health.CapacityCurrent = val
+		}
+	}
+	if v, ok := bat["energy-full-design"]; ok {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(strings.Replace(v, " Wh", "", 1)), 64); err == nil {
+			entry.Health.CapacityDesign = val
+		}
+	}
+	if v, ok := bat["wear_level"]; ok {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(strings.Replace(v, "%", "", 1)), 64); err == nil {
+			entry.Health.WearPct = val
+		}
+	}
+}
+
+func fillCPUData(sys map[string]string, entry *LogEntry) {
+	if v, ok := sys["current_frequency"]; ok {
+		entry.CPU.FreqGHz, entry.CPU.FreqMaxGHz = parseFrequency(v)
+	}
+	if v, ok := sys["cpu_temp"]; ok {
+		if temp, err := strconv.Atoi(strings.TrimSpace(strings.Replace(v, "°C", "", 1))); err == nil {
+			entry.CPU.TempC = temp
+		}
+	}
+	if v, ok := sys["load_avg (1min)"]; ok {
+		if val, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			entry.CPU.Load1Min = val
+		}
+	}
+	if v, ok := sys["thermal_throttling"]; ok {
+		entry.CPU.Throttling = strings.HasPrefix(v, "active")
+	}
+}
+
+func fillMemoryData(sys map[string]string, entry *LogEntry) {
 	if v, ok := sys["used"]; ok {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "used", v))
-	} else {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "used", "N/A"))
+		entry.Memory.UsedGB, entry.Memory.TotalGB = parseMemory(v)
 	}
 	if v, ok := sys["swap_used"]; ok {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "swap_used", v))
-	} else {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "swap_used", "N/A"))
+		entry.Memory.SwapMB = parseSwap(v)
 	}
+	if entry.Memory.TotalGB > 0 {
+		entry.Memory.Pct = int((entry.Memory.UsedGB / entry.Memory.TotalGB) * 100)
+	}
+}
 
-	// Display Section
-	b.WriteString("\nDisplay:\n")
+func fillGPUData(sys map[string]string, entry *LogEntry) {
+	if v, ok := sys["nvidia_gpu"]; ok {
+		entry.GPU.NvidiaActive = !strings.Contains(v, "off")
+		entry.GPU.Mode = v
+	}
+}
+
+func fillDisplayData(sys map[string]string, entry *LogEntry) {
 	if v, ok := sys["brightness"]; ok {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "brightness", v))
-	} else {
-		b.WriteString(fmt.Sprintf("  %-24s : %s\n", "brightness", "N/A"))
+		if brightness, err := strconv.Atoi(strings.TrimSpace(strings.Replace(v, "%", "", 1))); err == nil {
+			entry.Display.BrightnessPct = brightness
+		}
 	}
+}
 
-	// Top Processes Section
-	b.WriteString("\nTop Processes (cpu):\n")
+func fillProcessesData(sys map[string]string, entry *LogEntry) {
 	for i := 1; i <= 8; i++ {
 		key := fmt.Sprintf("top%d", i)
 		if v, ok := sys[key]; ok {
-			b.WriteString(fmt.Sprintf("  %s\n", v))
-		} else {
-			b.WriteString("  N/A\n")
+			proc := parseProcess(v)
+			if proc.Name != "" {
+				entry.TopProcesses = append(entry.TopProcesses, proc)
+			}
 		}
 	}
-
-	// Connectivity Section
-	b.WriteString("\nConnectivity:\n")
-	b.WriteString(fmt.Sprintf("  %-24s : %s\n", "wifi", getOrDefault(sys, "wifi")))
-	b.WriteString(fmt.Sprintf("  %-24s : %s\n", "bluetooth", getOrDefault(sys, "bluetooth")))
-
-	return b.String()
 }
 
-// getOrDefault obtiene un valor o retorna placeholder
-func getOrDefault(m map[string]string, key string) string {
-	if v, ok := m[key]; ok && v != "" {
-		return v
+func fillConnectivityData(sys map[string]string, entry *LogEntry) {
+	if v, ok := sys["wifi"]; ok {
+		entry.Connectivity.WiFi = strings.HasPrefix(v, "on")
 	}
-	return "N/A"
+	if v, ok := sys["bluetooth"]; ok {
+		entry.Connectivity.Bluetooth = (v == "on")
+	}
+}
+
+// parseTimeToMinutes convierte tiempo "X.X hours" a minutos
+func parseTimeToMinutes(t string) int {
+	t = strings.TrimSpace(strings.Replace(t, "hours", "", 1))
+	if val, err := strconv.ParseFloat(t, 64); err == nil {
+		return int(val * 60)
+	}
+	return 0
+}
+
+// parseFrequency extrae frecuencia actual y máxima
+func parseFrequency(f string) (current, max float64) {
+	parts := strings.Split(f, "/")
+	if len(parts) >= 2 {
+		current, _ = strconv.ParseFloat(strings.TrimSpace(strings.Replace(parts[0], "GHz", "", 1)), 64)
+		max, _ = strconv.ParseFloat(strings.TrimSpace(strings.Replace(parts[1], "GHz max", "", 1)), 64)
+	}
+	return
+}
+
+// parseMemory extrae uso y total de memoria
+func parseMemory(m string) (used, total float64) {
+	re := regexp.MustCompile(`([\d.]+)\s*GB\s*/\s*([\d.]+)\s*GB`)
+	matches := re.FindStringSubmatch(m)
+	if len(matches) >= 3 {
+		used, _ = strconv.ParseFloat(matches[1], 64)
+		total, _ = strconv.ParseFloat(matches[2], 64)
+	}
+	return
+}
+
+// parseSwap extrae swap usado en MB
+func parseSwap(s string) int {
+	s = strings.TrimSpace(strings.Replace(s, "MB", "", 1))
+	if val, err := strconv.Atoi(s); err == nil {
+		return val
+	}
+	return 0
+}
+
+// parseProcess extrae nombre, cpu y memoria de un proceso
+func parseProcess(p string) ProcessData {
+	re := regexp.MustCompile(`^\d+\.\s*(.+?)\s*:\s*([\d.]+)%\s*\((\d+)\s*MB\)`)
+	matches := re.FindStringSubmatch(p)
+	if len(matches) >= 4 {
+		cpu, _ := strconv.ParseFloat(matches[2], 64)
+		mem, _ := strconv.Atoi(matches[3])
+		return ProcessData{Name: matches[1], CPUPct: cpu, MemMB: mem}
+	}
+	return ProcessData{}
 }
